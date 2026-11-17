@@ -7,13 +7,13 @@ a public issue. Say what an attacker can do, against which version or commit, an
 it.
 
 What counts: anything that lets a model, a message or the sign-in page act beyond the one
-signed-in person; open a credential from a token without the key; reach a host other than the
-configured Exchange and AD FS; send without the two-step send; or get a password, a token or mail
+signed-in person; opens a credential from a token without the key; reach a host other than the
+configured Exchange and AD FS; send without the two-step send; or puts a password, a token or mail
 content into a log.
 
 ## What this server holds
 
-Nothing at rest. Credentials travel inside the OAuth tokens it issues, sealed with AES-GCM under
+It stores nothing at rest. Credentials travel inside the OAuth tokens it issues, sealed with AES-GCM under
 one key ([`docs/auth-modes.md`](docs/auth-modes.md)). There is no database and no session store.
 
 | Mode | Credential inside the tokens | Read |
@@ -32,7 +32,7 @@ one key ([`docs/auth-modes.md`](docs/auth-modes.md)). There is no database and n
 | Automatic forwarding to external domains off in Exchange (`Set-RemoteDomain Default -AutoForwardEnabled $false`) | the persistence an attacker would want after taking over a mailbox; this server cannot create rules, but the mailbox's owner can |
 | Sign-in attempt limit below the directory's lockout threshold | the sign-in page must not become a way to lock accounts |
 
-## By design, not here
+## Excluded by design
 
 Inbox rules, forwarding, delegates, permissions, other mailboxes, impersonation, export,
 synchronisation, push subscriptions, public folders, hard delete. See the

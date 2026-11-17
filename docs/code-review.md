@@ -1,21 +1,21 @@
 # Code review
 
-What a reviewer — a person, or `ocr review` driven by [`.opencodereview/rule.json`](../.opencodereview/rule.json)
-— looks for in every change. Each item points at the [manifesto](../MANIFESTO.md) rule it protects.
-A finding is fixed, or rejected with its reason written in the review; it is never silently dropped.
+What a reviewer (a person, or `ocr review` driven by [`.opencodereview/rule.json`](../.opencodereview/rule.json))
+looks for in every change. Each item points at the [manifesto](../MANIFESTO.md) rule it protects.
+A finding is fixed, or rejected with its reason written in the review. Nobody drops one silently.
 
 ## Blocking
 
 | # | Look for | Rule |
 |---|---|---|
-| B1 | HTTP or a SOAP string outside `ews/` (and AD FS calls outside `auth/adfs.py`) | 41 |
+| B1 | HTTP or a SOAP request built outside `ews/`. The other HTTP is named and nowhere else: AD FS in `auth/adfs.py`, the secrets manager in `keys/vault.py`, the client factory in `app.py`, the link routes' responses in `links/routes.py` | 41 |
 | B2 | An argument selecting a mailbox, user or server; `ExchangeImpersonation`; a `Mailbox` element for an address other than the person's own; a URL built from a person's input | 16 |
 | B3 | Key material read from `os.environ`; a key, password or token in a log call, an exception message, a URL or a result | 19, 20, 40 |
 | B4 | A credential, session or draft kept in a database, a file or a shared store | 19 |
 | B5 | `verify=False`, an `http://` upstream, or a setting that produces either | 22 |
 | B6 | Any code path that sends mail, invites, updates or cancels with attendees, or turns on an automatic reply without `user_confirmed is True` and a bucket draw before the EWS call | 24–26 |
 | B7 | `DeleteType` other than `MoveToDeletedItems`; `EmptyFolder`; `MessageDisposition` other than `SaveOnly` outside `send_draft` | 23, 24 |
-| B8 | Inbox rules, forwarding, delegates, permissions, other mailboxes, export, `SyncFolderItems`, subscriptions, public folders — in a tool, an EWS method or a route; a new operation in the allowlist | 28 |
+| B8 | Inbox rules, forwarding, delegates, permissions, other mailboxes, export, `SyncFolderItems`, subscriptions, public folders, in a tool, an EWS method or a route; a new operation in the allowlist | 28 |
 | B9 | A tool result built from an EWS object without a projection; `ChangeKey`, `ItemClass` or a `ResponseCode` reaching the model | 8 |
 | B10 | A list without a cap of 25, an `offset` argument, a truncation that does not say so | 9 |
 | B11 | Bytes or base64 in a tool result | 10 |

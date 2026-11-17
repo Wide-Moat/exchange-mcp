@@ -1,0 +1,20 @@
+{
+  "an_app": "Una aplicación",
+  "connect": "Conectar",
+  "consent": "<b>{app}</b> en <b>{host}</b> solicita acceso a su buzón: leerá y organizará su correo, calendario, contactos y tareas, y solo enviará lo que usted confirme. Inicie sesión solo si usted mismo inició esta conexión.",
+  "continue": "Continuar con el inicio de sesión",
+  "description": "Inicie sesión en su correo de trabajo para conectarlo a su aplicación de IA.",
+  "expired": "Este enlace de inicio de sesión caducó o ya se usó. Vuelva a conectar desde su aplicación de IA.",
+  "h1": "Iniciar sesión en el correo",
+  "h1_again": "Vuelva a conectar",
+  "lede": "Use el usuario y la contraseña de su correo de trabajo.",
+  "limited": "Demasiados intentos. Espere 15 minutos antes de volver a intentarlo.",
+  "login": "Usuario",
+  "login_hint": "nombre, DOMINIO\\nombre o nombre@dominio",
+  "note": "Este conector guarda su contraseña cifrada dentro de la conexión de su aplicación y solo la usa para acceder a su buzón. Los correos se envían solo después de que usted lo confirme.",
+  "password": "Contraseña",
+  "title": "Iniciar sesión en Exchange",
+  "unavailable": "Exchange no respondió. Inténtelo de nuevo en unos minutos.",
+  "unknown_client": "Este servidor ya no reconoce la conexión de su aplicación de IA: el servidor se actualizó o cambió su clave. En su aplicación de IA, borre la autorización de este conector y vuelva a conectar.",
+  "wrong": "El usuario o la contraseña no se aceptaron."
+}

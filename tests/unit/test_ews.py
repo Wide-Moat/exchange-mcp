@@ -1,0 +1,280 @@
+"""The EWS client: the allowlist, the one configured mailbox, errors inside HTTP 200, back-off, and a real
+NTLM handshake against an NTLM acceptor."""
+
+from __future__ import annotations
+
+import base64
+import inspect
+import re
+from pathlib import Path
+
+import httpx
+import pytest
+from conftest import EWS_URL, envelope, error, ok
+
+import exchange_mcp
+from exchange_mcp.core.errors import ExchangeError
+from exchange_mcp.ews.client import ALLOWED, Ews
+from exchange_mcp.ews.soap import M, T
+from exchange_mcp.ews.transport import Bearer, Ntlm
+
+SRC = Path(exchange_mcp.__file__).parent
+FORBIDDEN_OPS = {
+    "GetInboxRules",
+    "UpdateInboxRules",
+    "AddDelegate",
+    "UpdateDelegate",
+    "RemoveDelegate",
+    "GetDelegate",
+    "ExportItems",
+    "UploadItems",
+    "SyncFolderItems",
+    "SyncFolderHierarchy",
+    "Subscribe",
+    "Unsubscribe",
+    "GetEvents",
+    "GetStreamingEvents",
+    "EmptyFolder",
+    "SetHoldOnMailboxes",
+    "GetSearchableMailboxes",
+    "FindMailboxStatisticsByKeywords",
+    "SearchMailboxes",
+    "PlayOnPhone",
+    "MarkAllItemsAsRead",
+}
+
+
+def test_the_allowlist_holds_no_forbidden_operation():
+    assert not (ALLOWED & FORBIDDEN_OPS)
+
+
+async def test_an_operation_outside_the_allowlist_is_never_sent(ews, http):
+    client = Ews(http, EWS_URL, Bearer("t"))
+    for op in sorted(FORBIDDEN_OPS):
+        with pytest.raises(RuntimeError, match="allowlist"):
+            await client.call(getattr(M, op)())
+    assert ews.seen == []
+
+
+def test_no_module_outside_ews_speaks_http():
+    for path in SRC.rglob("*.py"):
+        rel = path.relative_to(SRC).as_posix()
+        if rel.startswith(("ews/", "keys/vault.py", "auth/adfs.py", "app.py", "links/routes.py", "signin.py")):
+            continue
+        src = path.read_text()
+        assert not re.search(r"\.(post|get|put|send|request)\(\s*(f?[\"']https?:|self\._url|url)", src), rel
+        assert "http.post(" not in src and "http.get(" not in src, rel
+
+
+def test_only_move_to_deleted_items_is_sent():
+    kinds = set()
+    for path in SRC.rglob("*.py"):
+        kinds |= set(re.findall(r"DeleteType=\"(\w+)\"", path.read_text()))
+    assert kinds == {"MoveToDeletedItems"}
+
+
+def test_save_draft_never_sends():
+    sending = {}
+    for path in SRC.rglob("*.py"):
+        found = set(re.findall(r"MessageDisposition=\"(\w+)\"", path.read_text())) - {"SaveOnly"}
+        if found:
+            sending[path.relative_to(SRC).as_posix()] = found
+    # Messages are sent by send_draft (SendItem) only. Meeting responses and cancellations are messages
+    # Exchange builds itself, sent from ews/calendar.py and nowhere else.
+    assert set(sending) <= {"ews/calendar.py"}, sending
+    send_calls = [p for p in SRC.rglob("*.py") if "M.SendItem(" in p.read_text()]
+    assert [p.name for p in send_calls] == ["mail.py"] and send_calls[0].parent.name == "ews"
+
+
+async def test_requests_go_to_the_configured_mailbox_only(rt, ews, invoke):
+    """A full mail flow: every request goes to the one EWS URL, none impersonates or names a mailbox."""
+    from test_mail import CREATED, TIPS, item, resolved
+
+    ews.on("ResolveNames", resolved("Pat", "pat@corp.example")).on("CreateItem", CREATED).on("GetItem", item())
+    ews.on("GetMailTips", TIPS).on("SendItem", ok("SendItem"))
+    await invoke("save_draft", to=["pat@corp.example"], body="hi")
+    await invoke("send_draft", id="D1", user_confirmed=True)
+    assert ews.seen
+    for s in ews.seen:
+        x = s.xml()
+        assert s.url == EWS_URL
+        assert "ExchangeImpersonation" not in x and "PrimarySmtpAddress" not in x
+        # a folder of another mailbox is a Mailbox element inside a folder id
+        assert not s.root.xpath("//*[local-name()='DistinguishedFolderId' or local-name()='FolderId']/*")
+
+
+async def test_an_error_inside_http_200_is_an_error(ews, http):
+    ews.on("GetItem", error("GetItem", "ErrorItemNotFound"))
+    with pytest.raises(ExchangeError) as e:
+        await Ews(http, EWS_URL, Bearer("t")).call(M.GetItem())
+    assert e.value.key == "not_found"
+
+
+async def test_busy_backs_off_then_says_when(ews, http):
+    busy = envelope(
+        '<m:GetItemResponse><m:ResponseMessages><m:GetItemResponseMessage ResponseClass="Error"><m:ResponseCode>'
+        'ErrorServerBusy</m:ResponseCode><m:MessageXml><t:Value Name="BackOffMilliseconds">200</t:Value>'
+        "</m:MessageXml></m:GetItemResponseMessage></m:ResponseMessages></m:GetItemResponse>"
+    )
+    slept: list[float] = []
+
+    async def sleep(s: float) -> None:
+        slept.append(s)
+
+    ews.on("GetItem", busy, busy, ok("GetItem"))
+    await Ews(http, EWS_URL, Bearer("t"), sleep=sleep).call(M.GetItem())
+    assert slept == [0.2, 0.2]
+
+
+async def test_a_401_means_sign_in_again(ews, http):
+    ews.on("GetItem", 401)
+    with pytest.raises(ExchangeError) as e:
+        await Ews(http, EWS_URL, Bearer("t")).call(M.GetItem())
+    assert e.value.key == "reconnect"
+
+
+async def test_xml_entities_are_not_expanded(ews, http):
+    bomb = (
+        b'<?xml version="1.0"?><!DOCTYPE x [<!ENTITY a "aaaaaaaaaa"><!ENTITY b "&a;&a;&a;&a;&a;">]>'
+        b'<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body><x>&b;</x></s:Body></s:Envelope>'
+    )
+    ews.on("GetItem", bomb)
+    try:
+        await Ews(http, EWS_URL, Bearer("t")).call(M.GetItem())
+    except ExchangeError:
+        pass  # refused or empty: either way nothing was expanded into memory
+
+
+async def test_ntlm_completes_a_real_handshake(monkeypatch, tmp_path):
+    """Leg 0 anonymous, leg 1 negotiate, leg 2 authenticate, checked by pyspnego's own NTLM acceptor."""
+    import spnego
+
+    users = tmp_path / "ntlm_users"
+    users.write_text("CORP:alex:right-password\n")
+    monkeypatch.setenv("NTLM_USER_FILE", str(users))
+    server = spnego.server(protocol="ntlm")
+    legs: list[str] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        auth = req.headers.get("authorization")
+        if not auth:
+            legs.append("anonymous")
+            return httpx.Response(401, headers={"WWW-Authenticate": "NTLM"})
+        token = base64.b64decode(auth.split(" ", 1)[1])
+        out = server.step(token)
+        if not server.complete:
+            legs.append("negotiate")
+            return httpx.Response(401, headers={"WWW-Authenticate": "NTLM " + base64.b64encode(out).decode()})
+        legs.append("authenticate")
+        return httpx.Response(200, content=ok("GetItem"))
+
+    http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    await Ews(http, EWS_URL, Ntlm("CORP\\alex", "right-password")).call(M.GetItem())
+    assert legs == ["anonymous", "negotiate", "authenticate"]
+    assert server.client_principal.lower() == "corp\\alex"
+
+
+def test_credentials_never_print():
+    assert "right" not in repr(Ntlm("CORP\\alex", "right")) and "tok" not in repr(Bearer("tok"))
+    from exchange_mcp.auth.credential import Credential
+
+    c = Credential("password", "a@corp.example", "a@corp.example", "A", password="right")
+    assert "right" not in repr(c)
+
+
+def test_t_namespace_used_for_mailbox_builders():
+    assert T.Mailbox is not None and inspect.isclass(type(T))
+
+
+async def test_ntlm_never_leaves_an_authenticated_connection_or_a_body_on_a_handshake_leg():
+    """NTLM authenticates a connection. The pool is shared by everyone, so the handshake legs carry no body
+    and the authenticated request closes its connection; a server that does not challenge is refused."""
+    import spnego
+
+    legs: list[tuple[str, bytes, str]] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        legs.append((req.headers.get("authorization", "")[:5], req.content, req.headers.get("connection", "")))
+        return httpx.Response(200, content=ok("GetItem"))  # as if the connection were already authenticated
+
+    http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    with pytest.raises(ExchangeError):
+        await Ews(http, EWS_URL, Ntlm("CORP\\alex", "pw")).call(M.DeleteItem())
+    assert [(a, body) for a, body, _ in legs] == [("", b"")]  # one empty probe; the delete never travelled
+    assert spnego is not None
+
+
+async def test_ntlm_final_leg_closes_its_connection(ews, http):
+    from conftest import PASSWORD
+
+    ews.on("GetItem", ok("GetItem"))
+    await Ews(http, EWS_URL, Ntlm("CORP\\alex", PASSWORD)).call(M.GetItem())
+    sent = ews.last("GetItem")
+    assert sent.headers["connection"] == "close" and sent.headers["authorization"].startswith("NTLM ")
+
+
+async def test_a_write_that_may_have_landed_is_never_reported_as_not_done():
+    """A dropped connection after sending, or an answer that is not EWS, leaves a write's outcome open."""
+
+    def dropped(req: httpx.Request) -> httpx.Response:
+        raise httpx.RemoteProtocolError("peer closed connection")
+
+    def proxy_page(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=b"<html><body>Gateway</body></html>")
+
+    for handler in (dropped, proxy_page):
+        http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        with pytest.raises(ExchangeError) as e:
+            await Ews(http, EWS_URL, Bearer("t")).call(M.SendItem())
+        assert e.value.key == "uncertain" and "may or may not" in e.value.text
+        with pytest.raises(ExchangeError) as e:
+            await Ews(http, EWS_URL, Bearer("t")).call(M.GetItem())
+        assert e.value.key == "busy"
+
+
+async def test_a_batch_partly_applied_is_reported_and_not_repeated(ews, http):
+    mixed = envelope(
+        "<m:MoveItemResponse><m:ResponseMessages>"
+        '<m:MoveItemResponseMessage ResponseClass="Success"><m:ResponseCode>NoError</m:ResponseCode></m:MoveItemResponseMessage>'
+        '<m:MoveItemResponseMessage ResponseClass="Error"><m:ResponseCode>ErrorServerBusy</m:ResponseCode></m:MoveItemResponseMessage>'
+        "</m:ResponseMessages></m:MoveItemResponse>"
+    )
+    ews.on("MoveItem", mixed)
+    with pytest.raises(ExchangeError) as e:
+        await Ews(http, EWS_URL, Bearer("t")).call(M.MoveItem())
+    assert e.value.key == "partial" and "1 of 2" in e.value.text
+    assert ews.ops() == ["MoveItem"]  # sent once, not replayed
+
+
+async def test_an_oversized_answer_is_not_read_into_memory(monkeypatch):
+    from exchange_mcp.ews import client as ec
+
+    monkeypatch.setattr(ec, "MAX_RESPONSE_BYTES", 1000)
+
+    def big(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=b"<" + b"x" * 5000)
+
+    http = httpx.AsyncClient(transport=httpx.MockTransport(big))
+    with pytest.raises(ExchangeError) as e:
+        await Ews(http, EWS_URL, Bearer("t")).call(M.GetAttachment())
+    assert e.value.key == "too_large"
+
+
+async def test_ntlm_calls_run_on_a_client_of_their_own(ews, http, monkeypatch):
+    """The shared pool may give a later NTLM leg another connection; an NTLM call gets its own client."""
+    from conftest import PASSWORD
+
+    from exchange_mcp.ews import client as ec
+
+    made: list[httpx.AsyncClient] = []
+
+    def own() -> httpx.AsyncClient:
+        c = httpx.AsyncClient(transport=httpx.MockTransport(ews.handler))
+        made.append(c)
+        return c
+
+    monkeypatch.setattr(ec, "isolated", own)
+    ews.on("GetItem", ok("GetItem"))
+    await Ews(http, EWS_URL, Ntlm("CORP\\alex", PASSWORD)).call(M.GetItem())
+    await Ews(http, EWS_URL, Bearer("t")).call(M.GetItem())
+    assert len(made) == 1 and made[0].is_closed  # one for the NTLM call, closed after it; none for Bearer

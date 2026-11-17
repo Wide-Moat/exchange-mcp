@@ -1,0 +1,57 @@
+[project]
+name = "exchange-mcp"
+version = "0.1.0"
+description = "On-premises Exchange connector for AI agents: one person's mail, calendar, contacts and tasks over MCP, through EWS."
+readme = "README.md"
+authors = [{ name = "Wide Moat" }]
+requires-python = ">=3.12"
+dependencies = [
+    "cryptography>=50.0.2",
+    "httpx>=0.28.1",
+    "lxml>=6.0.0",
+    "mcp>=2.3.0",
+    "nh3>=0.3.0",
+    "css-inline>=0.17.0",
+    "pydantic>=2.14.3",
+    "pyspnego>=0.11.2",
+    "uvicorn>=0.54.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.2.0",
+    "pytest-asyncio>=1.5.0",
+    "ruff>=0.17.5",
+    "tiktoken>=0.14.0",
+]
+
+[project.scripts]
+exchange-mcp = "exchange_mcp.app:main"
+
+[tool.pytest.ini_options]
+pythonpath = ["tests/unit"]
+testpaths = ["tests/unit"]
+asyncio_mode = "auto"
+addopts = "--strict-markers -m 'not live'"
+asyncio_default_fixture_loop_scope = "function"
+markers = ["live: talks to a real Exchange; run explicitly with `pytest -m live tests/live`"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "S", "ASYNC"]
+ignore = ["S101", "S105", "S106", "B008", "UP040"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S", "E501"]
+"tests/live/**" = ["S", "E501", "ASYNC"]  # a hand-run probe, not server code
+"src/exchange_mcp/signin.py" = ["E501"]
+
+[tool.ruff.format]
+quote-style = "double"

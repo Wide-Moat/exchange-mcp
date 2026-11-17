@@ -1,0 +1,214 @@
+# The gates. Shared ones come from Wide-Moat/ci; the ones that know this code live here.
+name: validate
+
+on:
+  # Dispatchable: the shared gates live in a private Wide-Moat/ci, reachable only while this
+  # repository's actions access stays "organization" — a setting, not a file.
+  workflow_dispatch:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  push:
+    branches: [main]
+
+concurrency:
+  group: validate-${{ github.event_name }}-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # Product code: anything naming an installation or a customer fails here.
+  purity:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    uses: Wide-Moat/ci/.github/workflows/purity-gate.yml@main
+    with:
+      runner: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+
+  yaml:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    uses: Wide-Moat/ci/.github/workflows/yaml-validate.yml@main
+    with:
+      runner: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+      yamllint-args: "."
+
+  reproducibility:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    uses: Wide-Moat/ci/.github/workflows/reproducibility-gate.yml@main
+    with:
+      runner: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+
+  # No `secrets: inherit`: passing secrets a gate does not declare invalidates the whole
+  # file, which arrives as a startup_failure with zero jobs and no log.
+  gitleaks:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    uses: Wide-Moat/ci/.github/workflows/gitleaks.yml@main
+    with:
+      runner: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+
+  semgrep:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    uses: Wide-Moat/ci/.github/workflows/semgrep.yml@main
+    with:
+      runner: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+
+  sca:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    uses: Wide-Moat/ci/.github/workflows/sca.yml@main
+    with:
+      runner: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+
+  tests:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: install the locked dependencies
+        run: |
+          python -m pip install --require-hashes -r requirements-test.lock
+          python -m pip install --no-deps -e .
+      - name: format and lint
+        run: |
+          python -m ruff format --check src tests scripts
+          python -m ruff check src tests scripts
+      - name: the tests pass
+        run: python -m pytest -q -p no:cacheprovider --junitxml=report.xml
+      - name: the suite is not empty and every collected test ran
+        # A collection error or a skipped module leaves a suite that runs nothing and passes.
+        # The floor is derived from the tests on disk, not a number chosen once.
+        run: |
+          defined=$(grep -rhoE '^\s*(async )?def test_[a-z0-9_]+' tests | wc -l | tr -d ' ')
+          ran=$(python scripts/junit_ran.py report.xml)
+          echo "$defined test functions on disk, $ran test cases ran"
+          if [ "$defined" -lt 150 ]; then
+            echo "fewer test functions than this repository has: the check itself is broken"; exit 2
+          fi
+          if [ "$ran" -lt "$defined" ]; then
+            echo "$((defined - ran)) test functions did not run"; exit 1
+          fi
+      - name: the catalogue fits the token budget
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m exchange_mcp.budget --check | tee budget.md
+          echo "## Token budget (default areas)" >> "$GITHUB_STEP_SUMMARY"
+          cat budget.md >> "$GITHUB_STEP_SUMMARY"
+          python -m exchange_mcp.budget --all --check > /dev/null
+      - name: every safety rule is caught by a test when it is broken
+        run: python scripts/mutation_check.py
+      - name: the tool surface matches its lock
+        run: python -m exchange_mcp.surface --check
+      - name: docs/tools.md matches the registry
+        run: |
+          python -m exchange_mcp.docs > /tmp/tools.md
+          diff -u docs/tools.md /tmp/tools.md
+
+  budget-comment:
+    # The table on the pull request, so the cost of a change is read before it merges.
+    # Not on a fork's pull request: its token is read-only and the comment would fail a green run.
+    if: >-
+      github.event_name == 'pull_request' && github.event.pull_request.draft == false &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    needs: tests
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 10
+    defaults:
+      run:
+        shell: bash
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: |
+          python -m pip install --require-hashes -r requirements-test.lock
+          python -m pip install --no-deps -e .
+          python -m exchange_mcp.budget > budget.md
+      - name: post or update the comment
+        # curl and the REST API: a self-hosted runner need not have the gh CLI.
+        shell: bash
+        env:
+          TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          api="${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}"
+          auth=(-H "Authorization: Bearer ${TOKEN}" -H "Accept: application/vnd.github+json")
+          { echo "<!-- exchange-budget -->"; echo "### Token budget"; echo; cat budget.md; } > body.md
+          payload=$(python -c 'import json,sys; print(json.dumps({"body": open("body.md").read()}))')
+          id=$(curl -fsS "${auth[@]}" "${api}/issues/${PR}/comments?per_page=100" \
+               | python scripts/comment_id.py)
+          if [ -n "$id" ]; then
+            curl -fsS -X PATCH "${auth[@]}" "${api}/issues/comments/${id}" -d "$payload" > /dev/null
+          else
+            curl -fsS -X POST "${auth[@]}" "${api}/issues/${PR}/comments" -d "$payload" > /dev/null
+          fi
+          echo "budget comment posted on #${PR}"
+
+  image:
+    if: github.event_name == 'pull_request' && github.event.pull_request.draft == false
+    # The shared build job declares packages: write; a caller that grants less makes the whole
+    # file invalid (startup_failure, zero jobs). It pushes nothing here: push is false.
+    permissions:
+      contents: read
+      packages: write
+    uses: Wide-Moat/ci/.github/workflows/image-build.yml@main
+    with:
+      runner: ${{ vars.CI_BUILD_RUNNER || vars.CI_RUNNER || 'ubuntu-latest' }}
+      push: false
+
+  probe:
+    # The built image starts as a non-root user, refuses a key in the environment, and serves OAuth
+    # metadata with a key file it generated the way a deployment would.
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - name: build
+        run: docker build -t exchange-mcp:ci .
+      - name: a key in the environment stops the server
+        run: |
+          set -uo pipefail
+          set +e  # the server is expected to refuse to start; the step checks why
+          out=$(docker run --rm -e EXCHANGE_MCP_PUBLIC_URL=https://mcp.example.com \
+            -e EXCHANGE_MCP_EWS_URL=https://mail.example.com/EWS/Exchange.asmx -e EXCHANGE_MCP_AUTH_MODE=password \
+            -e EXCHANGE_MCP_LOGIN_DOMAIN=corp.example -e EXCHANGE_MCP_KEY_PROVIDER=memory \
+            -e EXCHANGE_MCP_SECRET=abcdefabcdefabcdefabcdefabcdefabcdef exchange-mcp:ci 2>&1); code=$?
+          set -e
+          echo "$out" | tail -3
+          test "$code" -ne 0 && echo "$out" | grep -q "never read from the environment"
+      - name: starts with a generated key file and answers
+        run: |
+          set -euo pipefail
+          mkdir -p keys && printf 'k1:%s\n' "$(openssl rand 32 | basenc --base64url | tr -d '=')" > keys/key
+          chmod 0400 keys/key && sudo chown 10001 keys/key
+          docker run -d --name mcp -p 127.0.0.1:8000:8000 -v "$PWD/keys:/run/keys:ro" \
+            -e EXCHANGE_MCP_PUBLIC_URL=https://mcp.example.com \
+            -e EXCHANGE_MCP_EWS_URL=https://mail.example.com/EWS/Exchange.asmx -e EXCHANGE_MCP_AUTH_MODE=password \
+            -e EXCHANGE_MCP_LOGIN_DOMAIN=corp.example -e EXCHANGE_MCP_KEY_PROVIDER=file \
+            -e EXCHANGE_MCP_KEY_FILE=/run/keys/key exchange-mcp:ci
+          for _ in $(seq 1 30); do curl -fsS http://127.0.0.1:8000/healthz >/dev/null 2>&1 && break; sleep 1; done
+          curl -fsS -H 'Host: mcp.example.com' http://127.0.0.1:8000/.well-known/oauth-authorization-server \
+            | grep -q '"issuer":"https://mcp.example.com/\?"'
+          want="$(docker inspect -f '{{.Config.User}}' exchange-mcp:ci)"; got="$(docker exec mcp id -u)"
+          echo "image user ${want}, running as ${got}"; test "$got" = "$want" && test "$got" != 0
+      - name: server log
+        if: always()
+        run: docker logs mcp 2>&1 | tail -50 || true
+      - name: clean up
+        if: always()
+        run: docker rm -f mcp >/dev/null 2>&1 || true

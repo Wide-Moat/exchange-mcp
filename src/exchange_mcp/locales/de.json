@@ -1,0 +1,20 @@
+{
+  "an_app": "Eine Anwendung",
+  "connect": "Verbinden",
+  "consent": "<b>{app}</b> unter <b>{host}</b> möchte auf Ihr Postfach zugreifen: E-Mails, Kalender, Kontakte und Aufgaben lesen und ordnen und nur senden, was Sie bestätigen. Melden Sie sich nur an, wenn Sie diese Verbindung selbst begonnen haben.",
+  "continue": "Weiter zur Anmeldung",
+  "description": "Melden Sie sich bei Ihrem dienstlichen Postfach an, um es mit Ihrer KI-App zu verbinden.",
+  "expired": "Dieser Anmeldelink ist abgelaufen oder wurde bereits verwendet. Verbinden Sie sich erneut aus Ihrer KI-App.",
+  "h1": "Am Postfach anmelden",
+  "h1_again": "Erneut verbinden",
+  "lede": "Verwenden Sie Benutzername und Kennwort Ihrer dienstlichen E-Mail.",
+  "limited": "Zu viele Versuche. Warten Sie 15 Minuten, bevor Sie es erneut versuchen.",
+  "login": "Benutzername",
+  "login_hint": "name, DOMÄNE\\name oder name@domäne",
+  "note": "Dieser Connector speichert Ihr Kennwort verschlüsselt in der Verbindung Ihrer App und nutzt es nur für den Zugriff auf Ihr Postfach. E-Mails werden erst nach Ihrer Bestätigung gesendet.",
+  "password": "Kennwort",
+  "title": "Bei Exchange anmelden",
+  "unavailable": "Exchange hat nicht geantwortet. Versuchen Sie es in einigen Minuten erneut.",
+  "unknown_client": "Dieser Server erkennt die Verbindung Ihrer KI-App nicht mehr: Der Server wurde aktualisiert oder sein Schlüssel geändert. Entfernen Sie in Ihrer KI-App die Autorisierung dieses Connectors und verbinden Sie sich erneut.",
+  "wrong": "Benutzername oder Kennwort wurden nicht akzeptiert."
+}

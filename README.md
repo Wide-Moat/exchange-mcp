@@ -1,9 +1,9 @@
 # exchange-mcp
 
-An MCP server that gives an AI assistant one person's on-premises Exchange mailbox — mail,
-calendar, contacts, tasks — through Exchange Web Services, acting as that person and nothing more.
+An MCP server that gives an AI assistant one person's on-premises Exchange mailbox (mail,
+calendar, contacts, tasks) through Exchange Web Services, acting as that person with no further rights.
 
-**Status: design.** The documents below are written before the code and bind it.
+**Status: 0.1.0.** The documents below were written before the code and bind it; `CHANGELOG.md` says what each release holds.
 
 | Document | What it settles |
 |---|---|
@@ -18,7 +18,7 @@ calendar, contacts, tasks — through Exchange Web Services, acting as that pers
 
 | Mode | Needs | This server holds |
 |---|---|---|
-| `adfs` — **preferred** | Exchange 2019 CU13+ or Subscription Edition on every client-facing server; AD FS and Exchange configured by administrators | an AD FS token that reaches EWS only |
+| `adfs` (**preferred**) | Exchange 2019 CU13+ or Subscription Edition on every client-facing server; AD FS and Exchange configured by administrators | an AD FS token that reaches EWS only |
 | `password` | any Exchange with EWS | the person's directory password, sealed; no second factor ([risks](docs/auth-modes.md#the-risks-of-password-and-what-holds-each)) |
 
 The sealing key comes from Vault or OpenBao (recommended), or from a Kubernetes Secret generated at
@@ -35,5 +35,5 @@ deploy time. Never from an environment variable.
 | contacts | `save_contact`, `delete_contact` |
 | tasks | `list_tasks`, `save_task`, `delete_task` |
 
-Not here, by design: inbox rules, forwarding, delegates, permissions, other mailboxes,
+Excluded by design: inbox rules, forwarding, delegates, permissions, other mailboxes,
 impersonation, export, hard delete.

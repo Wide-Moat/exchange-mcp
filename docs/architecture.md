@@ -22,8 +22,8 @@ AD FS         https://<operator-configured host>/adfs/oauth2/...       (adfs mod
 ```
 
 Stateless: two replicas with the same key serve the same person. Per-replica state is limited to
-what is safe to lose: the sign-in attempt counters, the send bucket and the used-code set. Each
-of these is documented where it lives, with what a second replica changes.
+what is safe to lose: the sign-in attempt counters, the send bucket and the used-code set. The code documents each
+of these where it lives, with what a second replica changes.
 
 ## Request path
 
@@ -46,7 +46,7 @@ POST /mcp  Authorization: Bearer <sealed access token>
 | `keys/` | one interface, `seal(kind, payload, ttl)` / `open(kind, blob)`, key ids, rotation | reads key material from the environment |
 | `oauth/` | metadata, registration (the `client_id` is a sealed registration), codes (5 min, used once per replica), access (1 h), refresh (`adfs` 30 days, `password` 12 h) | a database |
 | `core/guard.py` | `user_confirmed is True`, the per-person bucket, recipient caps | lets a tool reach EWS before both pass |
-| `core/html.py` | outgoing pipeline (sanitise → `cid:` → inline CSS → validate) and the reader (HTML → text, hidden text dropped) | — |
+| `core/html.py` | outgoing pipeline (sanitise → `cid:` → inline CSS → validate) and the reader (HTML → text, hidden text dropped) | n/a |
 | `links/` | HMAC-signed, expiring, person-bound links; streaming in both directions | holds a file whole in memory |
 | `observability.py` | key-only log lines with an allowlist of fields; a filter that drops any record with an address, a JWT or a token shape; Prometheus counters | content |
 
@@ -57,11 +57,15 @@ POST /mcp  Authorization: Bearer <sealed access token>
 | `EXCHANGE_MCP_EWS_URL` | the one EWS endpoint, `https` only |
 | `EXCHANGE_MCP_CA_BUNDLE` | path to the CA bundle for Exchange and AD FS when they use an internal CA |
 | `EXCHANGE_MCP_AUTH_MODE` | `adfs` or `password` |
-| `EXCHANGE_MCP_ADFS_*` | issuer, client id, signing key file, EWS resource — `adfs` mode |
+| `EXCHANGE_MCP_LOGIN_FORMAT` | `password` mode: how a login is sent to Exchange, `upn` (`name@domain`) or `down_level` (`DOMAIN\name`) |
+| `EXCHANGE_MCP_LOGIN_DOMAIN` | `password` mode: the domain added when a person types a bare `name` (the NetBIOS name for `down_level`, the UPN suffix for `upn`) |
+| `EXCHANGE_MCP_LOGIN_ALSO` | `password` mode: the other spelling accepted exactly (the UPN suffix for `down_level`, the NetBIOS name for `upn`) |
+| `EXCHANGE_MCP_ADFS_*` | issuer, client id, signing key file, EWS resource (`adfs` mode) |
 | `EXCHANGE_MCP_KEY_PROVIDER` | `vault`, `file` or `memory` ([auth-modes](auth-modes.md#the-sealing-key)) |
 | `EXCHANGE_MCP_BASE_URL` | this server's public address; issuer of its tokens |
 | `EXCHANGE_MCP_LINKS_BASE_URL` | address of the link port as sandboxes reach it |
 | `EXCHANGE_MCP_AREAS` | the areas published |
+| `EXCHANGE_MCP_CLIENT_HOSTS` | optional: the only hosts MCP clients may register redirect addresses on (the organisation's chat or gateway); empty allows any https or loopback address |
 | `EXCHANGE_MCP_SIGNIN_LIMITS` | attempts per login and per network per 15 minutes |
 
 Names of hosts, domains and people never appear in this repository; they live in the

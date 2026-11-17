@@ -31,7 +31,7 @@ fetches the current `ChangeKey` itself before an update.
 | Person | display name, part of a name, or an address | `ResolveNames` against the address book and the person's contacts; ambiguity is an error listing up to 5 candidates with name, address, title |
 | Mail folder | well-known name (`inbox`, `sent`, `drafts`, `deleted`, `archive`, `junk`, `outbox`), a display name, or a path `Inbox/Projects` | `FindFolder` (deep traversal, cached per request); two folders with one name is an error listing their paths |
 | Time | `YYYY-MM-DD HH:MM` local to the mailbox time zone, or with an explicit offset | converts; output is local with offset |
-| Duration | minutes | — |
+| Duration | minutes | n/a |
 | Cursor | opaque signed string from the previous page | wraps the EWS paging offset; a cursor from another tool, person or query is refused |
 | Limit | 1–25, default 10 | values above 25 are clamped and the result says so |
 | Ids | strings, as returned | a number is refused |
@@ -43,9 +43,9 @@ Every tool, on every call, refuses with a clear `isError`:
 | Token missing, expired, altered, or sealed under a key no longer held | HTTP 401 with `resource_metadata`; a client that does not re-authorize shows: sign in again at `<base>/signin` |
 | EWS `401` (password changed, account disabled, AD FS token revoked) | sign in again; nothing was done |
 | EWS `ErrorAccessDenied` | Exchange refused; which action did not happen |
-| EWS `ErrorItemNotFound` on an id | the item does not exist or is not yours — never which |
+| EWS `ErrorItemNotFound` on an id | the item does not exist or is not yours; the text never says which |
 | `ErrorServerBusy` after back-off honouring `BackOffMilliseconds` | Exchange is busy; try again in N seconds |
-| Any other EWS failure | that the action did not happen, with a correlation id — never a success |
+| Any other EWS failure | that the action did not happen, with a correlation id; never reported as a success |
 
 ## Account
 
@@ -61,8 +61,8 @@ automatic reply is on. Upstream: `ResolveNames` on the person's own address,
 Find colleagues, contacts and rooms. `source`: `all`, `directory` (the address book), `contacts`
 (the person's own contacts), `rooms` (room lists and rooms). Returns name, address, title,
 department, phone; each result says where it came from. Upstream: `ResolveNames`
-(`ReturnFullContactData`, `SearchScope=ActiveDirectoryContacts`), `FindPeople` on the contacts
-folder, `GetRoomLists` / `GetRooms`.
+(`ReturnFullContactData`; `SearchScope` `ActiveDirectoryContacts`, `ActiveDirectory`, or `Contacts` for
+`source=contacts`), `GetRoomLists` / `GetRooms`.
 
 | Must refuse | Test |
 |---|---|
@@ -235,7 +235,7 @@ Moves a task to Deleted Items. Upstream: `DeleteItem DeleteType=MoveToDeletedIte
 | Must refuse | Test |
 |---|---|
 | key material given in the environment | tests/unit/test_keys.py::test_a_key_in_the_environment_stops_the_server |
-| a key file readable by group or others, or shorter than 32 bytes | tests/unit/test_keys.py::test_a_weak_or_open_key_file_stops_the_server |
+| a key file readable by others or by a foreign group, or shorter than 32 bytes | tests/unit/test_keys.py::test_a_weak_or_open_key_file_stops_the_server |
 | an altered token, or a token of another kind | tests/unit/test_oauth.py::test_an_altered_token_is_refused |
 | a token sealed under a key id no longer held | tests/unit/test_oauth.py::test_a_token_of_a_retired_key_is_refused |
 | an expired access or refresh token | tests/unit/test_oauth.py::test_tokens_expire |
@@ -244,8 +244,15 @@ Moves a task to Deleted Items. Upstream: `DeleteItem DeleteType=MoveToDeletedIte
 | a code exchange with a wrong PKCE verifier | tests/unit/test_http.py::test_a_wrong_pkce_verifier_is_refused |
 | a redirect URI that is not https (except loopback) or differs from the registration | tests/unit/test_oauth.py::test_redirect_uris_are_exact |
 | a 6th password attempt for one login within 15 minutes, or a 21st from one network | tests/unit/test_signin.py::test_password_attempts_are_limited |
+| a login whose domain is not the configured one, before any attempt reaches Exchange | tests/unit/test_signin.py::test_a_login_of_another_domain_is_refused |
+| one person counted as two because the login was typed in another form | tests/unit/test_signin.py::test_every_login_form_is_one_person |
 | a sign-in answer that differs between an unknown login and a wrong password | tests/unit/test_signin.py::test_unknown_and_wrong_look_the_same |
 | an EWS or AD FS address that is not https, or TLS verification turned off | tests/unit/test_config.py::test_tls_is_always_verified |
 | `password` mode refresh tokens longer than 24 hours | tests/unit/test_config.py::test_password_mode_refresh_is_capped |
 | a password, token or login in a log line or an exception message | tests/unit/test_observability.py::test_a_full_flow_logs_no_content |
 | the sign-in page served without `Cache-Control: no-store`, a CSP, and `frame-ancestors 'none'` | tests/unit/test_signin.py::test_the_sign_in_page_is_not_cached_or_framed |
+| a sign-in page that does not name the application and its address | tests/unit/test_signin.py::test_the_page_says_which_application_asks |
+| an AD FS callback in a browser other than the one that agreed | tests/unit/test_adfs.py::test_the_full_adfs_sign_in |
+| a client registering a redirect host the operator did not list | tests/unit/test_oauth.py::test_an_operator_can_limit_which_clients_register |
+| a refresh that extends the session past sign-in plus the refresh lifetime | tests/unit/test_oauth.py::test_refreshing_does_not_extend_the_session |
+| a mailbox taken as the person's on a matching local part alone | tests/unit/test_review_fixes.py::test_sign_in_never_takes_a_namesake_for_the_person |
