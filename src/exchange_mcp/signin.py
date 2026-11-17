@@ -335,10 +335,9 @@ def _with_form_cookie(response: Response, token: str) -> Response:
 
 def _origin_of(url: str) -> tuple[str, str, int | None]:
     """Scheme, host and port as a browser serialises an origin: lower case, default ports dropped."""
-    u = urlsplit(url.strip().rstrip("/"))
-    scheme, host = u.scheme.lower(), (u.hostname or "").lower()
-    try:
-        port = u.port
+    try:  # a malformed Origin is someone else's input: it matches nothing, it never raises
+        u = urlsplit(url.strip().rstrip("/"))
+        scheme, host, port = u.scheme.lower(), (u.hostname or "").lower(), u.port
     except ValueError:
         return ("", "", None)
     return scheme, host, None if port == {"https": 443, "http": 80}.get(scheme) else port

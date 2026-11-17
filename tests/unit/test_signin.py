@@ -256,6 +256,7 @@ def test_origins_compare_as_browsers_serialise_them():
     assert _origin_of("https://MCP.example.com:443") == _origin_of("https://mcp.example.com")
     assert _origin_of("https://mcp.example.com:8443") != _origin_of("https://mcp.example.com")
     assert _origin_of("http://mcp.example.com") != _origin_of("https://mcp.example.com")
+    assert _origin_of("https://[") == ("", "", None)  # malformed: matches nothing, does not raise
 
 
 async def test_a_non_ascii_form_token_is_refused_not_a_crash(ews):
