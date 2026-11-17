@@ -114,11 +114,14 @@ else stays reversible.**
     contents. *Violation:* `DeleteType` other than `MoveToDeletedItems`; `EmptyFolder`.
 24. **Sending is two steps.** `save_draft` writes a draft the person can see in Outlook;
     `send_draft(id, user_confirmed=true)` sends that draft as saved and nothing else. Only drafts
-    this server created can be updated or sent. *Violation:* `MessageDisposition=SendOnly` or
-    `SendAndSaveCopy` anywhere but `send_draft`; sending a draft this server did not create.
+    this server created can be updated or sent. Meeting responses and cancellations are messages
+    Exchange composes itself; they leave from `ews/calendar.py` under rules 25 and 26.
+    *Violation:* `MessageDisposition=SendOnly` or `SendAndSaveCopy` outside `ews/calendar.py`;
+    sending a draft this server did not create.
 25. **Anything other people see at once needs `user_confirmed=true`**, the JSON boolean, not "yes"
     and not 1: sending mail, inviting, rescheduling or cancelling a meeting, turning on an
-    automatic reply. Answering one's own invitation does not: it is one's own record.
+    automatic reply. Answering one's own invitation does not: it is one's own record, though the
+    answer still draws from the bucket of rule 26.
 26. **Rate.** All such actions draw from one bucket per person: 10 at once, refilled at 10 per
     minute. At most 20 recipients per action; distribution lists are refused. Mass mailing is out
     of scope, and the refusal says so.

@@ -62,7 +62,9 @@ def test_annotations_follow_behaviour():
             assert not spec.idempotent, name
         src = inspect.getsource(spec.fn)
         if spec.notifies_others:
-            assert ".guard(" in src or "guard.check" in src, f"{name} notifies others without the guard"
+            assert ".guard(" in src or "guard.check" in src or "guard.spend(" in src, (
+                f"{name} notifies others without the guard"
+            )
         if spec.read_only:
             assert not re.search(r"em\.(send|create|update|move|set|add|delete|rename|mark)", src), name
 

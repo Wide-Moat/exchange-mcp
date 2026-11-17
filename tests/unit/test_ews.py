@@ -74,10 +74,14 @@ def test_only_move_to_deleted_items_is_sent():
 
 
 def test_save_draft_never_sends():
-    dispositions = set()
+    sending = {}
     for path in SRC.rglob("*.py"):
-        dispositions |= set(re.findall(r"MessageDisposition=\"(\w+)\"", path.read_text()))
-    assert dispositions == {"SaveOnly"}
+        found = set(re.findall(r"MessageDisposition=\"(\w+)\"", path.read_text())) - {"SaveOnly"}
+        if found:
+            sending[path.relative_to(SRC).as_posix()] = found
+    # Messages are sent by send_draft (SendItem) only. Meeting responses and cancellations are messages
+    # Exchange builds itself, sent from ews/calendar.py and nowhere else.
+    assert set(sending) <= {"ews/calendar.py"}, sending
     send_calls = [p for p in SRC.rglob("*.py") if "M.SendItem(" in p.read_text()]
     assert [p.name for p in send_calls] == ["mail.py"] and send_calls[0].parent.name == "ews"
 

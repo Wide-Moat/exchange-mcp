@@ -13,7 +13,7 @@ from exchange_mcp.auth.credential import Credential
 from exchange_mcp.keys.seal import LocalSealer
 from exchange_mcp.oauth.provider import Provider
 
-CRED = Credential("password", "alex@corp.example", "alex@corp.example", "Alex", password="pw")
+CRED = Credential("password", "alex@corp.example", "alex@corp.example", "Alex", password="Sealed-Password-Value-42")
 
 
 def make(clock=None, refresh_ttl=12 * 3600):
@@ -117,5 +117,5 @@ async def test_the_access_token_carries_the_credential_sealed():
     p, _ = make()
     c = await client(p)
     tok = await p.exchange_authorization_code(c, await p.load_authorization_code(c, await code_for(p, c)))
-    assert "pw" not in tok.access_token and "alex" not in tok.access_token
-    assert (await p.credential_of(tok.access_token)).password == "pw"
+    assert "Sealed-Password-Value-42" not in tok.access_token and "alex@corp.example" not in tok.access_token
+    assert (await p.credential_of(tok.access_token)).password == "Sealed-Password-Value-42"
