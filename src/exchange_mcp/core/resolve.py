@@ -113,7 +113,8 @@ class Folder:
 async def folder_tree(ews: Ews, root: str = "msgfolderroot") -> list[Folder]:
     from exchange_mcp.ews.mail import folder_tree as raw_tree
 
-    raw = [r for r in await raw_tree(ews, root) if r.mail]  # calendars, contacts, tasks have their own tools
+    got = await raw_tree(ews, root)
+    raw = [r for r in got if r.mail]  # calendars, contacts, tasks have their own tools
     by_id = {r.id: r for r in raw}
 
     def path(fid: str, depth: int = 0) -> str:
@@ -124,7 +125,10 @@ async def folder_tree(ews: Ews, root: str = "msgfolderroot") -> list[Folder]:
         name = clean_name(r.name) or ""
         return f"{parent}/{name}" if parent else name
 
-    return [Folder(r.id, clean_name(r.name) or "", path(r.id), r.unread, r.total, r.children) for r in raw]
+    from exchange_mcp.ews.people import partial
+
+    folders = [Folder(r.id, clean_name(r.name) or "", path(r.id), r.unread, r.total, r.children) for r in raw]
+    return partial(folders, getattr(got, "truncated", False))
 
 
 async def folder(ews: Ews, value: str, *, archive: bool = False) -> str:

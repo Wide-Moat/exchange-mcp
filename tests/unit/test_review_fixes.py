@@ -282,3 +282,119 @@ async def test_a_query_keeps_exact_time_bounds(rt, ews, invoke):
     r = await invoke("list_messages", query="report", since="2026-11-17 09:00", until="2026-11-17 15:00")
     assert not r.is_error, r.text
     assert [m["id"] for m in r.data["items"]] == ["I9"]
+
+
+# ---------------------------------------------------------------- second review pass
+async def test_an_oversized_answer_to_a_write_leaves_the_outcome_open(monkeypatch):
+    import httpx
+    from conftest import EWS_URL
+
+    from exchange_mcp.ews import client as ec
+    from exchange_mcp.ews.soap import M
+    from exchange_mcp.ews.transport import Bearer
+
+    monkeypatch.setattr(ec, "MAX_RESPONSE_BYTES", 100)
+    http = httpx.AsyncClient(transport=httpx.MockTransport(lambda r: httpx.Response(200, content=b"<" * 500)))
+    with pytest.raises(ExchangeError) as e:
+        await ec.Ews(http, EWS_URL, Bearer("t")).call(M.SendItem())
+    assert e.value.key == "uncertain"
+
+
+async def test_a_batch_with_a_permanent_error_is_not_retried_as_busy(ews, http):
+    from conftest import EWS_URL
+
+    from exchange_mcp.ews.client import Ews
+    from exchange_mcp.ews.soap import M
+    from exchange_mcp.ews.transport import Bearer
+
+    msg = (
+        '<m:GetItemResponseMessage ResponseClass="Error"><m:ResponseCode>{}</m:ResponseCode></m:GetItemResponseMessage>'
+    )
+    ews.on(
+        "GetItem",
+        envelope(
+            "<m:GetItemResponse><m:ResponseMessages>"
+            + msg.format("ErrorServerBusy")
+            + msg.format("ErrorAccessDenied")
+            + "</m:ResponseMessages></m:GetItemResponse>"
+        ),
+    )
+    with pytest.raises(ExchangeError) as e:
+        await Ews(http, EWS_URL, Bearer("t")).call(M.GetItem())
+    assert e.value.key != "busy" and ews.ops() == ["GetItem"]
+
+
+def test_ntlm_legs_keep_the_client_timeouts():
+    import httpx
+
+    from exchange_mcp.ews.transport import Ntlm
+
+    req = httpx.Request(
+        "POST",
+        "https://mail.example.com/EWS/Exchange.asmx",
+        content=b"<x/>",
+        extensions={"timeout": {"connect": 5, "read": 30, "write": 30, "pool": 5}},
+    )
+    flow = Ntlm("CORP\\alex", "pw").auth_flow(req)
+    first = next(flow)
+    assert first.extensions["timeout"]["read"] == 30 and first.content == b""
+
+
+def test_offsets_past_fourteen_hours_are_refused():
+    from zoneinfo import ZoneInfo
+
+    for bad in ("2026-11-17 15:00+14:30", "2026-11-17 15:00-14:59"):
+        with pytest.raises(ExchangeError):
+            parse(bad, ZoneInfo("UTC"))
+    assert parse("2026-11-17 15:00+14:00", ZoneInfo("UTC")).utcoffset().total_seconds() == 14 * 3600
+
+
+def test_a_time_zone_without_a_windows_name_is_refused():
+    with pytest.raises(ConfigError, match="Windows zone"):
+        Settings.from_env(base_env(TIMEZONE="Antarctica/Troll"))
+    assert Settings.from_env(base_env(TIMEZONE="America/Toronto")).timezone == "America/Toronto"
+
+
+async def test_a_blank_phone_is_refused_rather_than_shifting_slots(rt, ews):
+    from exchange_mcp.tools.contacts import save_contact
+
+    with pytest.raises(ExchangeError):
+        await save_contact(name="Pat", emails=[], phones=["", "555-0100"])
+    assert ews.ops() == []
+
+
+async def test_a_meeting_across_a_clock_change_lasts_its_minutes(rt, ews, invoke):
+    from test_calendar import CREATED
+
+    ews.on("CreateItem", CREATED)
+    # Berlin, 28 March 2027: clocks jump 02:00 -> 03:00. 01:30 + 120 minutes is 04:30 local, 02:30Z.
+    r = await invoke("save_event", subject="Long", start="2027-03-28 01:30", duration=120)
+    assert not r.is_error, r.text
+    xml = ews.last("CreateItem").xml()
+    assert "2027-03-28T00:30:00Z" in xml and "2027-03-28T02:30:00Z" in xml
+
+
+async def test_suggestions_are_only_times_everyone_is_free(rt, ews, invoke):
+    ews.on(
+        "GetUserAvailability",
+        envelope(
+            "<m:GetUserAvailabilityResponse><m:FreeBusyResponseArray/><m:SuggestionsResponse>"
+            '<m:ResponseMessage ResponseClass="Error"><m:ResponseCode>ErrorInvalidSuggestionTimeRange</m:ResponseCode>'
+            "</m:ResponseMessage></m:SuggestionsResponse></m:GetUserAvailabilityResponse>"
+        ),
+    )
+    ews.on(
+        "ResolveNames",
+        ok(
+            "ResolveNames",
+            '<m:ResolutionSet TotalItemsInView="1" IncludesLastItemInRange="true">'
+            "<t:Resolution><t:Mailbox><t:Name>Pat</t:Name><t:EmailAddress>pat@corp.example"
+            "</t:EmailAddress><t:MailboxType>Mailbox</t:MailboxType></t:Mailbox></t:Resolution>"
+            "</m:ResolutionSet>",
+        ),
+    )
+    r = await invoke(
+        "find_meeting_times", people=["pat@corp.example"], start="2026-11-18 09:00", end="2026-11-18 18:00", duration=30
+    )
+    assert r.is_error and "refused" in r.text and "ErrorInvalidSuggestionTimeRange" not in r.text
+    assert "Excellent" in ews.last("GetUserAvailability").xml()

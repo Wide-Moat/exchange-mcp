@@ -44,11 +44,11 @@ class SignIn:
     async def page(self, request: Request) -> Response:
         lang = pick_lang(request.headers.get("accept-language", ""))
         rid = request.query_params.get("request", "")
-        if await self.provider.sign_in_request(rid) is None:
+        p = await self.provider.sign_in_request(rid)
+        if p is None:
             return _page(lang, heading=T[lang]["h1_again"], error=T[lang]["expired"], status=410)
         if self.adfs is not None:
             return RedirectResponse(await self.adfs.authorize_url(rid), status_code=302)
-        p = await self.provider.sign_in_request(rid)
         return _page(lang, form=_form(lang, rid), redirect=_origin(p))
 
     async def submit(self, request: Request) -> Response:

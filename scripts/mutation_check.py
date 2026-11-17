@@ -257,7 +257,7 @@ MUTATIONS = [
         "invitations need the person's word",
         "tools/calendar.py",
         [
-            ('            c.rt.guard.confirmed(kind="invite", user_confirmed=user_confirmed)\n', ""),
+            ('            c.rt.guard.confirmed(kind="invite", user_confirmed=user_confirmed)\n', "            pass\n"),
             (
                 'receipt = c.guard(kind="invite", user_confirmed=user_confirmed, recipients=told)',
                 'receipt = c.guard(kind="invite", user_confirmed=True, recipients=told)',

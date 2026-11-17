@@ -66,6 +66,49 @@ WINDOWS_ZONES = {
     "America/Denver": "Mountain Standard Time",
     "America/Los_Angeles": "Pacific Standard Time",
     "America/Sao_Paulo": "E. South America Standard Time",
+    "America/Toronto": "Eastern Standard Time",
+    "America/Vancouver": "Pacific Standard Time",
+    "America/Mexico_City": "Central Standard Time (Mexico)",
+    "America/Phoenix": "US Mountain Standard Time",
+    "America/Anchorage": "Alaskan Standard Time",
+    "Pacific/Honolulu": "Hawaiian Standard Time",
+    "America/Bogota": "SA Pacific Standard Time",
+    "America/Argentina/Buenos_Aires": "Argentina Standard Time",
+    "Australia/Melbourne": "AUS Eastern Standard Time",
+    "Australia/Brisbane": "E. Australia Standard Time",
+    "Australia/Perth": "W. Australia Standard Time",
+    "Australia/Adelaide": "Cen. Australia Standard Time",
+    "Pacific/Auckland": "New Zealand Standard Time",
+    "Asia/Seoul": "Korea Standard Time",
+    "Asia/Hong_Kong": "China Standard Time",
+    "Asia/Bangkok": "SE Asia Standard Time",
+    "Asia/Jakarta": "SE Asia Standard Time",
+    "Asia/Karachi": "Pakistan Standard Time",
+    "Asia/Riyadh": "Arab Standard Time",
+    "Asia/Tehran": "Iran Standard Time",
+    "Africa/Cairo": "Egypt Standard Time",
+    "Africa/Johannesburg": "South Africa Standard Time",
+    "Africa/Lagos": "W. Central Africa Standard Time",
+    "Europe/Oslo": "W. Europe Standard Time",
+    "Europe/Stockholm": "W. Europe Standard Time",
+    "Europe/Copenhagen": "Romance Standard Time",
+    "Europe/Sofia": "FLE Standard Time",
+    "Europe/Belgrade": "Central Europe Standard Time",
+    "Europe/Chisinau": "E. Europe Standard Time",
+    "Europe/Volgograd": "Volgograd Standard Time",
+    "Europe/Astrakhan": "Astrakhan Standard Time",
+    "Europe/Saratov": "Saratov Standard Time",
+    "Europe/Ulyanovsk": "Astrakhan Standard Time",
+    "Asia/Barnaul": "Altai Standard Time",
+    "Asia/Tomsk": "Tomsk Standard Time",
+    "Asia/Novokuznetsk": "North Asia Standard Time",
+    "Asia/Chita": "Transbaikal Standard Time",
+    "Asia/Sakhalin": "Sakhalin Standard Time",
+    "Asia/Srednekolymsk": "Russia Time Zone 10",
+    "Asia/Anadyr": "Russia Time Zone 11",
+    "Asia/Bishkek": "Central Asia Standard Time",
+    "Asia/Dhaka": "Bangladesh Standard Time",
+    "Asia/Kathmandu": "Nepal Standard Time",
 }
 
 
@@ -89,7 +132,7 @@ def parse(value: str, tz: ZoneInfo, *, field: str = "time") -> datetime:
         if off == "Z":
             return dt.replace(tzinfo=UTC)
         sign, hh_o, mm_o = off[0], int(off[1:3]), int(off[-2:])
-        if hh_o > 14 or mm_o > 59:
+        if hh_o > 14 or mm_o > 59 or (hh_o == 14 and mm_o):
             raise invalid(f"{field} has an offset that does not exist; offsets run from -14:00 to +14:00.")
         delta = timedelta(hours=hh_o, minutes=mm_o)
         return dt.replace(tzinfo=timezone(delta if sign == "+" else -delta))

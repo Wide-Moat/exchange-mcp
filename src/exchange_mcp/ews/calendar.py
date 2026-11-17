@@ -499,7 +499,7 @@ async def availability(
                 T.MaximumResultsByDay("10"),
                 T.MaximumNonWorkHourResultsByDay("0" if working_hours_only else "10"),
                 T.MeetingDurationInMinutes(str(duration)),
-                T.MinimumSuggestionQuality("Good"),
+                T.MinimumSuggestionQuality("Excellent"),  # Excellent: everyone free; Good allows conflicts
                 T.DetailedSuggestionsWindow(T.StartTime(_naive(start)), T.EndTime(_naive(end))),
             )
         )
@@ -518,6 +518,12 @@ async def availability(
         out.append(Availability(addr, known, busy))
     for addr, _ in people[len(responses) :]:
         out.append(Availability(addr, False, []))
+    sr = next(root.iter("{*}SuggestionsResponse"), None)
+    msg = sr.find("{*}ResponseMessage") if sr is not None else None
+    if msg is not None and msg.get("ResponseClass") == "Error":
+        raise ExchangeError(
+            "failed", code=text(msg, "m:ResponseCode", "ErrorUnknown"), ref="suggestions", outcome="Nothing was read."
+        )
     suggestions = []
     for s in root.iter("{*}Suggestion"):
         suggestions.append(

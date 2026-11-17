@@ -23,6 +23,7 @@ def _row(t: et.Task, tz) -> dict[str, Any]:
         {
             "id": t.id,
             "subject": t.subject[:255],
+            "subject_truncated": len(t.subject) > 255,
             "status": t.status,
             "due": (local(t.due, tz) or "")[:10] or None,
             "start": (local(t.start, tz) or "")[:10] or None,

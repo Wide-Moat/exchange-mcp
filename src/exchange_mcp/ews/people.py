@@ -21,6 +21,18 @@ PHONE_KEYS = ("BusinessPhone", "MobilePhone", "HomePhone", "OtherTelephone")
 MAX_ROOM_LISTS = 50
 
 
+class Partial(list):
+    """A list that knows Exchange or this server left some entries out."""
+
+    truncated = False
+
+
+def partial(items: list, truncated: bool) -> list:
+    out = Partial(items)
+    out.truncated = truncated
+    return out
+
+
 @dataclass
 class Found:
     name: str
@@ -70,7 +82,11 @@ async def resolve_names(ews: Ews, query: str, *, directory_only: bool) -> list[F
             return []
         raise
     out = []
+    complete = True
     for m in messages:
+        rs = find(m, "m:ResolutionSet")
+        if rs is not None and rs.get("IncludesLastItemInRange", "true") != "true":
+            complete = False
         for r in findall(m, "m:ResolutionSet/t:Resolution"):
             mb = find(r, "t:Mailbox")
             contact = find(r, "t:Contact")
@@ -92,7 +108,7 @@ async def resolve_names(ews: Ews, query: str, *, directory_only: bool) -> list[F
             )
             if found.address or found.id:
                 out.append(found)
-    return out
+    return partial(out, not complete)
 
 
 def _indexed(uri: str, key: str) -> etree._Element:
@@ -125,7 +141,7 @@ async def find_contacts(ews: Ews, query: str, offset: int, limit: int) -> tuple[
             M.Restriction(
                 T.Or(
                     contains(T.FieldURI(FieldURI="contacts:DisplayName")),
-                    contains(_indexed("contacts:EmailAddress", "EmailAddress1")),
+                    *[contains(_indexed("contacts:EmailAddress", k)) for k in EMAIL_KEYS],
                 )
             ),
             M.SortOrder(T.FieldOrder(T.FieldURI(FieldURI="contacts:DisplayName"), Order="Ascending")),
@@ -157,9 +173,11 @@ async def rooms(ews: Ews) -> list[Found]:
     """Every room of every room list the organisation publishes."""
     messages = await ews.call(M.GetRoomLists())
     _ok(messages[0])
-    lists = [
+    every_list = [
         (text(a, "t:Name"), text(a, "t:EmailAddress")) for a in findall(find(messages[0], "m:RoomLists"), "t:Address")
-    ][:MAX_ROOM_LISTS]
+    ]
+    lists = every_list[:MAX_ROOM_LISTS]
+    partial_lists = len(every_list) > MAX_ROOM_LISTS
     out: list[Found] = []
     seen: set[str] = set()
     for list_name, list_address in lists:
@@ -173,7 +191,7 @@ async def rooms(ews: Ews) -> list[Found]:
             if address and address.lower() not in seen:
                 seen.add(address.lower())
                 out.append(Found(name=text(rid, "t:Name"), address=address, source="rooms", room_list=list_name))
-    return out
+    return partial(out, partial_lists)
 
 
 # ---------------------------------------------------------------- contacts

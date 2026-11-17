@@ -60,10 +60,15 @@ async def list_people(
             return page_result([_row(f) for f in found], nxt, **extra)
         if source == "rooms":
             every = await ep.rooms(c.ews)
+            cut = getattr(every, "truncated", False)
             if q:
                 every = [f for f in every if q.lower() in f.name.lower() or q.lower() in f.address.lower()]
         else:
             every = await ep.resolve_names(c.ews, q, directory_only=source == "directory")
+            cut = getattr(every, "truncated", False)
         rows = [_row(f) for f in every[start : start + n]]
         nxt = await c.cursor_out({"o": start + n} if start + n < len(every) else None, scope)
-        return page_result(rows, nxt, **extra)
+        out = page_result(rows, nxt, **extra)
+        if cut and nxt is None:
+            out["truncated"] = "Exchange returned only part of the matches; make the query more specific."
+        return out

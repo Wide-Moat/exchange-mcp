@@ -144,3 +144,29 @@ def test_entity_encoded_data_image_survives_css_inlining():
     out = prepare_outgoing(raw)
     assert not out.errors and len(out.inline_images) == 1
     assert f'src="cid:{out.inline_images[0].content_id}"' in out.html
+
+
+def test_important_declaration_beats_a_later_normal_one_in_the_same_rule():
+    assert html_to_text("<style>.x{display:none!important;display:block}</style><p class=x>Hidden</p>") == ""
+    assert html_to_text('<p style="display:none !important; display:block">Hidden</p>') == ""
+
+
+def test_rem_font_size_overrides_an_inherited_zero():
+    assert html_to_text('<div style="font-size:0"><span style="font-size:1rem">Visible</span></div>') == "Visible"
+    assert html_to_text('<div style="font-size:0"><span style="font-size:2em">gone</span></div>') == ""
+
+
+def test_color_initial_resets_instead_of_inheriting():
+    assert html_to_text('<div style="color:transparent"><span style="color:initial">Visible</span></div>') == "Visible"
+    # color is an inherited property: unset (and revert, to the user-agent default) inherit it.
+    assert html_to_text('<div style="color:transparent"><span style="color:unset">gone</span></div>') == ""
+
+
+def test_child_combinator_is_evaluated_against_the_real_parent():
+    css = "<style>body > .x{display:none}</style>"
+    assert html_to_text(css + '<div><p class="x">Visible</p></div>') == "Visible"
+    assert html_to_text(css + '<p class="x">gone</p><p>ok</p>') == "ok"
+    assert (
+        html_to_text(css + '<html><body><p class="x">gone</p><div><p class="x">Kept</p></div></body></html>') == "Kept"
+    )
+    assert html_to_text("<style>html > body .y{display:none}</style><div class=y>gone</div>ok") == "ok"

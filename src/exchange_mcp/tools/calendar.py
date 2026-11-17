@@ -23,8 +23,9 @@ from exchange_mcp.registry import tool
 LIST_DAYS = 62
 AVAILABILITY_DAYS = 42
 MAX_VIEWS = 5
-MAX_ATTENDEES_SHOWN = 50
-MAX_BUSY_SHOWN = 50
+MAX_ATTENDEES_SHOWN = 25
+MAX_BUSY_SHOWN = 25
+MAX_LISTED = 25
 MAX_SLOTS = 10
 BODY_CHARS = 20_000
 QUALITY = {"Excellent": 0, "Good": 1, "Fair": 2, "Poor": 3}
@@ -37,6 +38,11 @@ RESPONSE = {
 }
 ID = Annotated[str, Field(description="An event id from list_events.", min_length=1, max_length=512)]
 PEOPLE = Annotated[list[str] | None, Field(description="Names or addresses.")]
+
+
+def _plus(start: datetime, minutes: int) -> datetime:
+    """Minutes of elapsed time, counted in UTC: across a clock change, wall-clock addition is an hour off."""
+    return (start.astimezone(UTC) + timedelta(minutes=minutes)).astimezone(start.tzinfo)
 
 
 def _t(value: str) -> datetime:
@@ -96,8 +102,11 @@ async def list_events(
         done: set[str] = set(state.get("k", []))
         picked: list[ec.Event] = []
         more = False
+        stuck = False
         for _ in range(MAX_VIEWS):
-            view = await ec.calendar_view(c.ews, pos or ews_time(s), ews_time(e))
+            since = max(_t(pos), s) if pos else s
+            view = await ec.calendar_view(c.ews, ews_time(since), ews_time(e))
+            before = (pos, len(done), len(picked))
             for ev in view.events:
                 if pos is not None and (_t(ev.start) < _t(pos) or (_t(ev.start) == _t(pos) and ev.id in done)):
                     continue
@@ -112,10 +121,18 @@ async def list_events(
                     pos, done = ev.start, {ev.id}
             if more or view.complete or not view.events:
                 break
+            if (pos, len(done), len(picked)) == before:
+                # More events start at one instant than one view returns: the rest cannot be reached by
+                # moving the window. Say so instead of handing out a cursor that returns the same page.
+                stuck = True
+                break
         else:
             more = True
-        nxt = await c.cursor_out({"p": pos, "k": sorted(done)} if more and pos else None, scope)
-        return page_result([_row(ev, c.me, tz) for ev in picked], nxt, **extra)
+        nxt = await c.cursor_out({"p": pos, "k": sorted(done)} if more and pos and not stuck else None, scope)
+        out = page_result([_row(ev, c.me, tz) for ev in picked], nxt, **extra)
+        if stuck:
+            out["truncated"] = "More events start at the same moment than can be listed; narrow the window."
+        return out
 
 
 @tool(area="calendar", title="Read an event", read_only=True, idempotent=True)
@@ -134,8 +151,11 @@ async def get_event(id: ID, include_body: bool = True) -> dict[str, Any]:
         ]
         out["attendees"] = people[:MAX_ATTENDEES_SHOWN]
         if len(people) > MAX_ATTENDEES_SHOWN:
-            out["attendees_note"] = f"The first {MAX_ATTENDEES_SHOWN} of {len(people)} attendees."
-        out["rooms"] = [compact({"name": name(r.name), "address": r.address}) for r in ev.rooms]
+            out["attendees_truncated"] = True
+            out["attendees_total"] = len(people)
+        out["rooms"] = [compact({"name": name(r.name), "address": r.address}) for r in ev.rooms[:MAX_LISTED]]
+        if len(ev.rooms) > MAX_LISTED:
+            out["rooms_truncated"] = True
         out["repeats"] = ev.recurrence or None
         out["reminder_minutes"] = ev.reminder
         if include_body and ev.html:
@@ -145,9 +165,8 @@ async def get_event(id: ID, include_body: bool = True) -> dict[str, Any]:
                 out["body_truncated"] = True
                 out["body_chars"] = len(body)
         files = []
-        for a in ev.attachments:
-            if a.inline:
-                continue
+        listed = [a for a in ev.attachments if not a.inline]
+        for a in listed[:MAX_LISTED]:
             entry: dict[str, Any] = {"name": name(a.name), "size": a.size, "type": a.content_type}
             if a.kind == "file" and c.rt.links is not None:
                 entry.update(await c.rt.links.download(c.cred, c.person, a.id, a.name, a.size))
@@ -155,6 +174,8 @@ async def get_event(id: ID, include_body: bool = True) -> dict[str, Any]:
                 entry["note"] = "An attached item: open it in Outlook."
             files.append(entry)
         out["attachments"] = files
+        if len(listed) > MAX_LISTED:
+            out["attachments_truncated"] = True
         return compact(out)
 
 
@@ -219,7 +240,7 @@ async def find_meeting_times(
                     for b in blocks[:MAX_BUSY_SHOWN]
                 ]
                 if len(blocks) > MAX_BUSY_SHOWN:
-                    row["busy_note"] = f"The first {MAX_BUSY_SHOWN} of {len(blocks)} busy times."
+                    row["busy_truncated"] = True
             rows.append(compact(row) if a.known and duration else row)
         out["people"] = rows
         if duration:
@@ -293,7 +314,7 @@ async def save_event(
             if e is None and duration is None:
                 raise invalid("A new event needs end or duration. Nothing was saved.")
         if s is not None and duration is not None:
-            e = s + timedelta(minutes=duration)
+            e = _plus(s, duration)
         if s is not None and e is not None and e <= s:
             raise invalid("end must be after start. Nothing was saved.")
 
@@ -308,7 +329,7 @@ async def save_event(
             elif e is not None and s is None:
                 s = was_s
             if duration is not None and s is None:
-                s, e = was_s, was_s + timedelta(minutes=duration)
+                s, e = was_s, _plus(was_s, duration)
             if s is not None and e is not None and e <= s:
                 raise invalid("end must be after start. Nothing was saved.")
         rule = None

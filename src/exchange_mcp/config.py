@@ -63,10 +63,15 @@ def _file(name: str, value: str | None, *, required: bool) -> Path | None:
 def _zone(value: str) -> str:
     from zoneinfo import ZoneInfo
 
+    from exchange_mcp.core.time import windows_zone
+
     try:
         ZoneInfo(value)
     except Exception:
         raise ConfigError(f"{PREFIX}TIMEZONE is not a time zone") from None
+    if windows_zone(value) is None:
+        # Without the Windows name a repeating meeting is anchored to UTC and moves at clock changes.
+        raise ConfigError(f"{PREFIX}TIMEZONE has no Windows zone name here; use a zone listed in core/time.py")
     return value
 
 

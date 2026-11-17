@@ -127,6 +127,8 @@ class Ews:
             content, status = await self._post(payload)
         except _TooLarge:
             log.warning("ews %s response over %s bytes ref=%s", operation, MAX_RESPONSE_BYTES, ref)
+            if write:
+                raise unknown_outcome() from None
             raise ExchangeError("too_large", size="the answer", limit=f"{MAX_RESPONSE_BYTES // 2**20} MB") from None
         except (httpx.ConnectError, httpx.ConnectTimeout):
             log.warning("ews %s could not connect ref=%s", operation, ref)
@@ -174,7 +176,7 @@ class Ews:
         if not errors:
             return messages
         busy = [m for m in errors if text(m, "m:ResponseCode") == "ErrorServerBusy"]
-        if busy and len(errors) == len(checked):
+        if busy and len(busy) == len(checked):
             raise _Busy(_backoff(busy[0]))  # nothing in the batch happened: safe to send again
         if write and len(errors) < len(checked):
             # Part of a batch was applied. Sending it again would repeat what succeeded; saying it failed

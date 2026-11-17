@@ -58,6 +58,7 @@ class Limiter:
         if len(self._seen) + new > MAX_KEYS:
             for k in [k for k, q in self._seen.items() if not q or q[-1] <= now - WINDOW]:
                 del self._seen[k]
+            new = sum(1 for key in keys.values() if key not in self._seen)
             if len(self._seen) + new > MAX_KEYS:
                 raise Limited  # a flood of distinct logins or networks: refuse rather than grow without bound
         for key in keys.values():

@@ -408,7 +408,10 @@ def _decls(style: str) -> dict[str, tuple[str, bool]]:
             k, v = decl.split(":", 1)
             v = v.strip().lower()
             important = bool(re.search(r"!\s*important", v))
-            out[k.strip().lower()] = (re.sub(r"!\s*important", "", v).strip(), important)
+            k = k.strip().lower()
+            if k in out and out[k][1] and not important:
+                continue  # an earlier !important beats a later normal declaration
+            out[k] = (re.sub(r"!\s*important", "", v).strip(), important)
     return out
 
 
@@ -725,10 +728,6 @@ def _ancestors_match(chain: tuple[tuple[str, _Compound], ...], i: int, anc: list
     if i == 0:
         return True
     comb, comp = chain[i][0], chain[i - 1][1]
-    if comp.tag in ("html", "body") and comp.ident is None and not comp.classes:
-        # A fragment has no <html> or <body> element, but its content is inside both.
-        if not any(f.tag == comp.tag for f in anc[:end]):
-            return _ancestors_match(chain, i - 1, anc, end)
     if comb == ">":
         f = anc[end - 1] if end else None
         return bool(f and comp.matches(f.tag, f.ident, f.classes) and _ancestors_match(chain, i - 1, anc, end - 1))
@@ -754,12 +753,25 @@ class _ToText(HTMLParser):
     def hidden(self) -> bool:
         return bool(self.stack) and self.stack[-1].hidden
 
+    def _ancestors(self, tag: str) -> list[_Frame]:
+        """The open elements plus the <html> and <body> a browser would have created around a
+        fragment, so `body > .x` is tested against the element's real parent."""
+        anc = list(self.stack)
+        tags = {f.tag for f in anc}
+        if tag not in ("html", "body") and not tags & {"body", "head"} and tag not in _HEAD_CONTENT:
+            at = next((i + 1 for i, f in enumerate(anc) if f.tag == "html"), 0)
+            anc.insert(at, _Frame("body", None, frozenset(), False, None, None, False))
+        if tag != "html" and "html" not in tags:
+            anc.insert(0, _Frame("html", None, frozenset(), False, None, None, False))
+        return anc
+
     def _computed(self, tag: str, ident: str | None, classes: frozenset[str], style: str) -> dict[str, str]:
         entries: list[tuple[tuple, str, str]] = []
+        anc = self._ancestors(tag)
         keys = [("", tag), ("", "*"), *((".", c) for c in classes)] + ([("#", ident)] if ident else [])
         for r in (r for k in keys for r in self.rules.get(k, ())):
             if r.chain[-1][1].matches(tag, ident, classes) and _ancestors_match(
-                r.chain, len(r.chain) - 1, self.stack, len(self.stack)
+                r.chain, len(r.chain) - 1, anc, len(anc)
             ):
                 entries.extend(((imp, 0, *r.key), k, v) for k, (v, imp) in r.decls.items())
         entries.extend(((imp, 1, (0, 0, 0), 0), k, v) for k, (v, imp) in _decls(style).items())
@@ -832,13 +844,16 @@ class _ToText(HTMLParser):
                 self.out.append("\n")
             return
         color = s.get("color") or a.get("color") or ""
-        if not color or color in ("inherit", "currentcolor", "initial", "unset"):
+        if color == "initial":
+            color = None  # the default text colour, not the parent's
+        elif not color or color in ("inherit", "currentcolor", "unset", "revert", "revert-layer"):
+            # color is an inherited property, so unset and revert inherit too
             color = parent.color if parent else None
         bg = s.get("background-color") or a.get("bgcolor") or ""
         if not bg or bg in ("inherit", "initial", "unset", "currentcolor") or _is_transparent(bg):
             bg = parent.bg if parent else None
         fs = s.get("font-size")
-        if fs is None or fs in ("inherit", "unset") or (re.search(r"(em|%)\s*$", fs) and not _is_zero(fs)):
+        if fs is None or fs in ("inherit", "unset") or (re.search(r"((?<!r)em|ex|ch|%)\s*$", fs) and not _is_zero(fs)):
             tiny = parent.tiny if parent else False  # relative to a zero size stays zero
         else:
             tiny = _is_zero(fs)

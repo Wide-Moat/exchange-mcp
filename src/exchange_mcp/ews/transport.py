@@ -99,7 +99,8 @@ class Ntlm(httpx.Auth):
     def _empty(request: httpx.Request) -> httpx.Request:
         headers = {k: v for k, v in request.headers.items() if k.lower() not in ("content-length", "authorization")}
         headers["Content-Length"] = "0"
-        return httpx.Request("POST", request.url, headers=headers)
+        # extensions carry the client's timeouts; a leg without them could wait on Exchange forever
+        return httpx.Request("POST", request.url, headers=headers, extensions=dict(request.extensions))
 
 
 class Bearer(httpx.Auth):

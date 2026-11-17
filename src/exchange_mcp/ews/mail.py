@@ -629,6 +629,10 @@ async def folder_tree(ews: Ews, root: str) -> list[RawFolder]:
                 )
             )
         last = rf is None or rf.get("IncludesLastItemInRange", "true") == "true"
-        if last or not page or len(out) >= 20 * FOLDER_PAGE:
+        if last or not page:
             return out
+        if len(out) >= 20 * FOLDER_PAGE:
+            from exchange_mcp.ews.people import partial
+
+            return partial(out, True)
         offset += len(page)

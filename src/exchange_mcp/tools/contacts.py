@@ -47,6 +47,8 @@ async def save_contact(
         for a in emails or []:
             if not ADDRESS.match(a.strip()):
                 raise invalid("Each of emails is one e-mail address. Nothing was saved.")
+        if any(not (x or "").strip() for x in [*(emails or []), *(phones or [])]):
+            raise invalid("An address or a phone number cannot be empty; leave it out instead. Nothing was saved.")
         if name is not None and not name.strip():
             raise invalid("name cannot be empty. Nothing was saved.")
         fields = ep.ContactFields(
@@ -54,7 +56,7 @@ async def save_contact(
             notes=notes,
             company=company,
             emails=[a.strip() for a in emails] if emails is not None else None,
-            phones=[p.strip() for p in phones if p.strip()] if phones is not None else None,
+            phones=[p.strip() for p in phones] if phones is not None else None,
             job_title=job_title,
         )
         if id is None:

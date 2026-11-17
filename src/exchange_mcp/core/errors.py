@@ -21,7 +21,8 @@ MESSAGES: dict[str, str] = {
     "forbidden": "Exchange does not let you do this. {outcome}",
     "not_found": "It does not exist, or it is not yours to see. Find it again with the tool that lists it.",
     "busy": "Exchange is busy right now. Try again in {seconds}. Nothing was done.",
-    "failed": "Exchange refused the request ({code}). {outcome} Reference {ref}.",
+    # The EWS code goes to the log beside the reference, not to the person (manifesto rule 11).
+    "failed": "Exchange refused the request. {outcome} Reference {ref}.",
     "uncertain": (
         "Exchange failed while handling this, so it may or may not have happened. Check before trying again. "
         "Reference {ref}."

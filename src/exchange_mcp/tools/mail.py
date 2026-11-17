@@ -95,13 +95,17 @@ async def list_messages(
             scope = {"k": "folders", "a": archive}
             start = (await c.cursor_in(cursor, scope) or {}).get("o", 0)
             tree = await resolve.folder_tree(c.ews, "archivemsgfolderroot" if archive else "msgfolderroot")
+            cut = getattr(tree, "truncated", False)
             tree.sort(key=lambda f: f.path.lower())
             rows = [
                 compact({"path": f.path, "unread": f.unread, "total": f.total, "subfolders": f.children})
                 for f in tree[start : start + n]
             ]
             nxt = await c.cursor_out({"o": start + n} if start + n < len(tree) else None, scope)
-            return page_result(rows, nxt, **extra)
+            out = page_result(rows, nxt, **extra)
+            if cut and nxt is None:
+                out["truncated"] = "The mailbox has more folders than this connector reads; find one by name."
+            return out
 
         where = folder or ("archive" if archive else "inbox")
         scope = {
