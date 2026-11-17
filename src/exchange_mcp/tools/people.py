@@ -69,6 +69,6 @@ async def list_people(
         rows = [_row(f) for f in every[start : start + n]]
         nxt = await c.cursor_out({"o": start + n} if start + n < len(every) else None, scope)
         out = page_result(rows, nxt, **extra)
-        if cut and nxt is None:
+        if cut:  # on every page: later pages cannot bring back what Exchange left out
             out["truncated"] = "Exchange returned only part of the matches; make the query more specific."
         return out

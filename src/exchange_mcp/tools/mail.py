@@ -103,7 +103,7 @@ async def list_messages(
             ]
             nxt = await c.cursor_out({"o": start + n} if start + n < len(tree) else None, scope)
             out = page_result(rows, nxt, **extra)
-            if cut and nxt is None:
+            if cut:
                 out["truncated"] = "The mailbox has more folders than this connector reads; find one by name."
             return out
 
