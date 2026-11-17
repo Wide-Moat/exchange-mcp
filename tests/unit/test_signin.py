@@ -248,3 +248,20 @@ async def test_a_form_posted_from_another_site_is_refused(ews):
     blind = await f.client.post("/signin", data={"request": rid, "login": "alex", "password": "x", "form": "guess"})
     assert blind.status_code == 403
     assert ews.attempts() == 0  # neither reached Exchange
+
+
+def test_origins_compare_as_browsers_serialise_them():
+    from exchange_mcp.signin import _origin_of
+
+    assert _origin_of("https://MCP.example.com:443") == _origin_of("https://mcp.example.com")
+    assert _origin_of("https://mcp.example.com:8443") != _origin_of("https://mcp.example.com")
+    assert _origin_of("http://mcp.example.com") != _origin_of("https://mcp.example.com")
+
+
+async def test_a_non_ascii_form_token_is_refused_not_a_crash(ews):
+    f = Flow(ews)
+    cid = await f.register()
+    rid = await f.request_id(cid, _pkce()[1])
+    await f.client.get("/signin", params={"request": rid})  # the page sets its cookie
+    r = await f.client.post("/signin", data={"request": rid, "login": "a", "password": "b", "form": "токен"})
+    assert r.status_code == 403

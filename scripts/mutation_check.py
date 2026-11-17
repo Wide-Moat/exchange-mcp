@@ -480,8 +480,7 @@ MUTATIONS = [
         "signin.py",
         [
             (
-                "        if not _same_origin(request) or not token or not hmac.compare_digest(token, "
-                'str(form.get("form", ""))):',
+                "        if not _same_origin(request) or not token or not hmac.compare_digest(token.encode(), posted):",
                 "        if False:",
             )
         ],
@@ -490,7 +489,7 @@ MUTATIONS = [
     (
         "a cross-site post is refused even with a token",
         "signin.py",
-        [('        return origin.rstrip("/") == runtime().settings.public_url', "        return True")],
+        [("        return _origin_of(origin) == _origin_of(runtime().settings.public_url)", "        return True")],
         "tests/unit/test_signin.py",
     ),
     (

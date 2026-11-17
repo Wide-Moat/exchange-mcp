@@ -82,7 +82,8 @@ class SignIn:
         if p is None:
             return _page(lang, heading=t["h1_again"], error=t["expired"], status=410)
         token = request.cookies.get(FORM_COOKIE, "")
-        if not _same_origin(request) or not token or not hmac.compare_digest(token, str(form.get("form", ""))):
+        posted = str(form.get("form", "")).encode()  # bytes: compare_digest refuses non-ASCII text
+        if not _same_origin(request) or not token or not hmac.compare_digest(token.encode(), posted):
             # Posted from another site, or without the page this server showed: the person did not agree here.
             log.info("sign-in refused: form not from this page")
             return _page(lang, heading=t["h1_again"], error=t["expired"], status=403)
@@ -332,11 +333,22 @@ def _with_form_cookie(response: Response, token: str) -> Response:
     return response
 
 
+def _origin_of(url: str) -> tuple[str, str, int | None]:
+    """Scheme, host and port as a browser serialises an origin: lower case, default ports dropped."""
+    u = urlsplit(url.strip().rstrip("/"))
+    scheme, host = u.scheme.lower(), (u.hostname or "").lower()
+    try:
+        port = u.port
+    except ValueError:
+        return ("", "", None)
+    return scheme, host, None if port == {"https": 443, "http": 80}.get(scheme) else port
+
+
 def _same_origin(request: Request) -> bool:
     """A browser names where a POST comes from; a form on another site is refused."""
     origin = request.headers.get("origin")
     if origin is not None:
-        return origin.rstrip("/") == runtime().settings.public_url
+        return _origin_of(origin) == _origin_of(runtime().settings.public_url)
     return request.headers.get("sec-fetch-site", "same-origin") in ("same-origin", "none")
 
 
