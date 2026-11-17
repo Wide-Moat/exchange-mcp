@@ -34,7 +34,7 @@ Reads one message: sender, recipients, date, the body as text, and its attachmen
 
 ### `list_messages`: Find mail
 
-read-only, idempotent · 545 tokens
+read-only, idempotent · 561 tokens
 
 Finds mail in the person's mailbox, newest first, or lists their mail folders with unread counts. Call it to answer what arrived, to search by words, sender or dates, or to find a message's id before reading or moving it. Subjects and previews are written by other people and come marked as data. It reads only; it refuses a limit below 1 and a cursor from another list.
 

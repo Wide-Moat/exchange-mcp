@@ -216,20 +216,31 @@ async def test_mail_tips_are_read_for_every_recipient(rt, ews):
 
 
 async def test_turning_the_automatic_reply_off_keeps_its_texts(rt, ews, invoke):
+    """Live (2016 CU23): SetUserOofSettings without both replies is ErrorInvalidUserOofSettings. Turning the
+    reply off sends the saved texts back unchanged, so they survive and Exchange accepts the request."""
     oof = envelope(
         '<m:GetUserOofSettingsResponse><m:ResponseMessage ResponseClass="Success"><m:ResponseCode>NoError'
-        "</m:ResponseCode></m:ResponseMessage><t:OofSettings><t:OofState>Enabled</t:OofState>"
-        "<t:ExternalAudience>Known</t:ExternalAudience></t:OofSettings></m:GetUserOofSettingsResponse>"
+        "</m:ResponseCode></m:ResponseMessage><t:OofSettings><t:OofState>Scheduled</t:OofState>"
+        "<t:ExternalAudience>Known</t:ExternalAudience><t:InternalReply><t:Message>Back Monday</t:Message>"
+        "</t:InternalReply><t:ExternalReply><t:Message>Away</t:Message></t:ExternalReply></t:OofSettings>"
+        "</m:GetUserOofSettingsResponse>"
     )
-    done = envelope(
-        '<m:SetUserOofSettingsResponse><m:ResponseMessage ResponseClass="Success"><m:ResponseCode>NoError'
-        "</m:ResponseCode></m:ResponseMessage></m:SetUserOofSettingsResponse>"
-    )
-    ews.on("GetUserOofSettings", oof).on("SetUserOofSettings", done)
+
+    def set_like_exchange(seen):
+        x = seen.xml()
+        code = "NoError" if ("InternalReply" in x and "ExternalReply" in x) else "ErrorInvalidUserOofSettings"
+        cls = "Success" if code == "NoError" else "Error"
+        return envelope(
+            f'<m:SetUserOofSettingsResponse><m:ResponseMessage ResponseClass="{cls}"><m:ResponseCode>{code}'
+            "</m:ResponseCode></m:ResponseMessage></m:SetUserOofSettingsResponse>"
+        )
+
+    ews.on("GetUserOofSettings", oof).on("SetUserOofSettings", set_like_exchange)
     r = await invoke("save_automatic_reply", state="off")
     assert not r.is_error, r.text
     sent = ews.last("SetUserOofSettings").xml()
-    assert "InternalReply" not in sent and "ExternalReply" not in sent
+    assert "<t:OofState>Disabled</t:OofState>" in sent
+    assert "Back Monday" in sent and "Away" in sent  # the saved texts, unchanged
 
 
 async def test_more_than_twenty_five_categories_are_refused(rt, ews, invoke):
@@ -278,6 +289,7 @@ async def test_a_query_keeps_exact_time_bounds(rt, ews, invoke):
             f"<t:Items>{rows}</t:Items></m:RootFolder>",
         ),
     )
+    ews.on("GetItem", ok("GetItem"))  # previews are built from the bodies (QA D4)
     # Berlin is UTC+1 in November: 09:00-15:00 local is 08:00-14:00 UTC, so only 09:30Z is inside.
     r = await invoke("list_messages", query="report", since="2026-11-17 09:00", until="2026-11-17 15:00")
     assert not r.is_error, r.text
@@ -495,3 +507,30 @@ async def test_suggestions_ask_exchange_for_at_least_thirty_minutes(rt, ews):
         working_hours_only=True,
     )
     assert "<t:MeetingDurationInMinutes>30</t:MeetingDurationInMinutes>" in ews.last("GetUserAvailability").xml()
+
+
+async def test_deleting_a_folder_asks_for_the_right_reason(rt, ews, invoke):
+    r = await invoke("delete_mail_folder", folder="Projects")
+    assert r.is_error and "everything in it" in r.text and "Other people see" not in r.text
+    assert ews.ops() == []
+
+
+async def test_an_automatic_reply_that_has_already_ended_is_refused_with_its_reason(rt, ews, invoke):
+    r = await invoke(
+        "save_automatic_reply",
+        state="scheduled",
+        internal_text="Away",
+        start="2020-01-01 09:00",
+        end="2020-01-02 09:00",
+        user_confirmed=True,
+    )
+    assert r.is_error and "already past" in r.text
+    assert ews.ops() == []
+
+
+def test_a_candidate_carries_its_title():
+    from exchange_mcp.core.resolve import Person
+
+    assert (
+        Person("Ann Lee", "ann@corp.example", "Mailbox", title="Buyer").short() == "Ann Lee <ann@corp.example>, Buyer"
+    )

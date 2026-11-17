@@ -29,7 +29,8 @@ class Person:
     alias: str = ""
 
     def short(self) -> str:
-        return f"{self.name} <{self.address}>" if self.name else self.address
+        who = f"{self.name} <{self.address}>" if self.name else self.address
+        return f"{who}, {self.title}" if self.title else who  # QA D13: the title tells namesakes apart
 
 
 async def candidates(ews: Ews, query: str, *, scope: str = "ActiveDirectoryContacts") -> list[Person]:
@@ -142,16 +143,35 @@ async def folder_tree(ews: Ews, root: str = "msgfolderroot") -> list[Folder]:
     return partial(folders, getattr(got, "truncated", False))
 
 
-async def folder(ews: Ews, value: str, *, archive: bool = False) -> str:
-    """A folder id for a well-known name, a display name or a path like Inbox/Projects; with `archive`,
-    looked up in the online archive."""
+@dataclass(frozen=True)
+class Located:
+    id: str
+    label: str  # what a result calls the folder: the well-known name, or its path
+
+
+async def locate(ews: Ews, value: str, *, archive: bool = False) -> Located:
+    """A folder for a well-known name, a display name or a path like Inbox/Projects; with `archive`, in the
+    online archive, where inbox and deleted are the archive's own well-known folders."""
+    from exchange_mcp.ews.mail import ARCHIVE_WELL_KNOWN
+
     v = value.strip()
-    key = v.lower()
-    if archive and key in ("archive", ""):
-        return "archivemsgfolderroot"
-    if key in WELL_KNOWN and not archive:
-        return WELL_KNOWN[key]
-    tree = await folder_tree(ews, "archivemsgfolderroot" if archive else "msgfolderroot")
+    key = v.lower() or "inbox"
+    known = ARCHIVE_WELL_KNOWN if archive else WELL_KNOWN
+    tree = None
+    if archive and key in ("inbox", "archive", "deleted"):
+        # Live (2016 CU23): an archive policy files mail into a copy of the mailbox's tree, under the
+        # mailbox's own folder names ("Inbox" in the person's language) at the archive's top level; the
+        # archive's distinguished inbox stays empty. That copy is used when it exists.
+        from exchange_mcp.ews.mail import folder_name
+
+        own = (await folder_name(ews, "deleteditems" if key == "deleted" else "inbox")).lower()
+        tree = await folder_tree(ews, "archivemsgfolderroot")
+        top = [f for f in tree if f.path.lower() == own]
+        if len(top) == 1:
+            return Located(top[0].id, top[0].path)
+    if key in known:
+        return Located(known[key], key)
+    tree = tree if tree is not None else await folder_tree(ews, "archivemsgfolderroot" if archive else "msgfolderroot")
     matches = [f for f in tree if f.path.lower() == key] or [f for f in tree if f.name.lower() == key]
     if not matches:
         raise ExchangeError("unresolved", kind="folder", query=v)
@@ -159,4 +179,37 @@ async def folder(ews: Ews, value: str, *, archive: bool = False) -> str:
         raise ExchangeError(
             "ambiguous", kind="folder", query=v, candidates="; ".join(f.path for f in matches[:MAX_CANDIDATES])
         )
-    return matches[0].id
+    return Located(matches[0].id, matches[0].path)
+
+
+async def folder(ews: Ews, value: str, *, archive: bool = False) -> str:
+    """The folder id of `locate`."""
+    return (await locate(ews, value, archive=archive)).id
+
+
+# ---------------------------------------------------------------- addresses of senders
+
+
+async def owner_of(ews: Ews, address: str) -> Person | None:
+    """The address-book entry that owns this exact address (primary or secondary), or None: an address
+    outside the organisation, or one Exchange cannot tell apart."""
+    try:
+        found = await candidates(ews, address)
+    except ExchangeError:
+        return None
+    exact = [p for p in found if p.address.lower() == address.lower()]
+    if len(exact) == 1:
+        return exact[0]
+    if not exact and len(found) == 1 and not getattr(found, "truncated", False):
+        return found[0]
+    return None
+
+
+async def address_of_dn(ews: Ews, dn: str) -> str | None:
+    """The SMTP address behind an Exchange X.500 DN, or None when Exchange does not give exactly one."""
+    try:
+        found = await candidates(ews, dn)
+    except ExchangeError:
+        return None
+    smtp = {p.address.lower(): p.address for p in found if ADDRESS.match(p.address)}
+    return next(iter(smtp.values())) if len(smtp) == 1 and not getattr(found, "truncated", False) else None

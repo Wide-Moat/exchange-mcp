@@ -364,8 +364,8 @@ MUTATIONS = [
         "tools/mail.py",
         [
             (
-                "                internal=None,\n                external=None,",
-                '                internal="",\n                external="",',
+                '                internal=before["internal"],',
+                '                internal="",',
             )
         ],
         "tests/unit/test_review_fixes.py",
@@ -497,6 +497,23 @@ MUTATIONS = [
         "oauth/provider.py",
         [('            started=int(p.get("s0", now)),', "            started=int(now),")],
         "tests/unit/test_oauth.py",
+    ),
+    (
+        "an upload link attaches its file once",
+        "links/routes.py",
+        [("            if any(a.name == name and not a.inline for a in draft.attachments):", "            if False:")],
+        "tests/unit/test_links.py",
+    ),
+    (
+        "previews never carry hidden text",
+        "tools/mail.py",
+        [
+            (
+                "        html, got = await _previews(c, found)",
+                "        html, got = {m.id: m.preview for m in found}, True",
+            )
+        ],
+        "tests/unit/test_qa_mail.py",
     ),
 ]
 

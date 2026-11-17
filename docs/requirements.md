@@ -84,7 +84,7 @@ Moves one personal contact to Deleted Items. Upstream: `DeleteItem DeleteType=Mo
 
 ## Mail
 
-### `list_messages(kind=messages, folder?, query?, unread_only?, from?, since?, until?, has_attachments?, archive?, limit, cursor)`
+### `list_messages(kind=messages, folder?, query?, unread_only?, sender?, since?, until?, has_attachments?, archive?, limit, cursor)`
 Messages newest first, or with `kind=folders` the folder tree with unread and total counts. `query`
 is the Exchange search syntax (`AQS`); `archive` searches the person's online archive when they have
 one. Each message: id, folder, from, to (first 5 and a count), subject, received, preview (255
@@ -99,8 +99,8 @@ listed, not linked. With `include_thread`, the other messages of the conversatio
 newest first, previews only). Upstream: `GetItem` (`BodyType=HTML`, then the HTML pipeline's
 reader), `GetConversationItems`, `GetAttachment` streamed through `/d/…`.
 
-### `save_mail_folder(folder?, name?, parent?)`
-No `folder` creates `name` under `parent` (default the mailbox root); with `folder`, renames it or
+### `save_mail_folder(folder?, folder_name?, parent?)`
+No `folder` creates `folder_name` under `parent` (default the mailbox root); with `folder`, renames it or
 moves it under `parent`. Well-known folders cannot be renamed or moved. Upstream: `CreateFolder`,
 `UpdateFolder`, `MoveFolder`.
 

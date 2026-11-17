@@ -19,7 +19,7 @@ WELL_KNOWN = {
     "deleted": "deleteditems",
     "junk": "junkemail",
     "outbox": "outbox",
-    "archive": "archivemsgfolderroot",
+    "archive": "archiveinbox",  # what a person means by "my archive": its inbox, not its empty root
     "root": "msgfolderroot",
     "calendar": "calendar",
     "contacts": "contacts",

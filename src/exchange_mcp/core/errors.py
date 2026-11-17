@@ -37,6 +37,10 @@ MESSAGES: dict[str, str] = {
         "Other people see this at once. Ask the person to confirm{target}, then call again with "
         "user_confirmed=true. {outcome}"
     ),
+    "confirm_delete": (
+        "This moves the folder{target} and everything in it to Deleted Items. Ask the person to confirm, then call "
+        "again with user_confirmed=true. Nothing was deleted."
+    ),
     "too_many": "At most {limit} {what} per action; this has {count}. Nothing was done.",
     "rate": (
         "Too many actions that other people see, in a short time. The allowance is the person's: {capacity} "
@@ -66,6 +70,8 @@ def _sentence_params(key: str, params: dict[str, Any]) -> dict[str, Any]:
         out["seconds"] = f"{out['seconds']} second" + ("" if out["seconds"] == 1 else "s")
     if key == "confirm":
         out.setdefault("outcome", "Nothing was sent.")
+        out["target"] = f" ({out['target']})" if out.get("target") else ""
+    if key == "confirm_delete":
         out["target"] = f" ({out['target']})" if out.get("target") else ""
     if key in ("forbidden", "failed"):
         out.setdefault("outcome", "Nothing was changed.")

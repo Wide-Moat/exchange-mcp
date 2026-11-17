@@ -99,7 +99,11 @@ async def resolve_names(
             item = find(mb, "t:ItemId")
             source = "contacts" if kind in CONTACT_KINDS else "directory"
             found = Found(
-                name=text(mb, "t:Name") or text(contact, "t:DisplayName"),
+                # A contact resolves once per address, and its t:Name is then that address (QA D12):
+                # the contact's own display name comes first.
+                name=(text(contact, "t:DisplayName") if source == "contacts" else "")
+                or text(mb, "t:Name")
+                or text(contact, "t:DisplayName"),
                 address=text(mb, "t:EmailAddress"),
                 source=source,
                 group=kind in GROUP_KINDS,
