@@ -75,6 +75,7 @@ def catch_code(port: int) -> dict:
 
 
 SEND_TO = sys.argv[2] if len(sys.argv) > 2 else None  # the person's own word: an address to send one test to
+EXTERNAL = "--external" in sys.argv
 TOKEN_FILE = os.environ.get("PROBE_TOKEN_FILE")  # optional: reuse one sign-in across runs (0600)
 
 
@@ -202,10 +203,9 @@ async def send_check(s: ClientSession, to: str) -> None:
     d = await s.call_tool("save_draft", {"to": [to], "subject": subject, "body": body})
     expect(not d.is_error, "save_draft saved a draft")
     draft = d.structured_content
-    expect(
-        bool(draft.get("external_recipients")) or to.endswith(draft.get("to", [""])[0].split("@")[-1]),
-        "the preview names external recipients",
-    )
+    expect(draft.get("to") == [to] or draft.get("to") == [to.lower()], "the draft is addressed as asked")
+    if EXTERNAL:  # the person said the address is outside the organisation
+        expect(draft.get("external_recipients") == draft["to"], "the preview flags the external recipient")
     refused = await s.call_tool("send_draft", {"id": draft["id"], "user_confirmed": "yes"})
     expect(refused.is_error, 'send_draft refuses "yes" as a confirmation')
     sent = await s.call_tool("send_draft", {"id": draft["id"], "user_confirmed": True})
