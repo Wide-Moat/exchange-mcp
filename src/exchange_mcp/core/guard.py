@@ -70,6 +70,8 @@ class Guard:
     def confirmed(self, *, kind: str, user_confirmed: bool | None, target: str | None = None) -> None:
         """The person's word alone, for actions that do not draw on the bucket (deleting one's own folder)."""
         if user_confirmed is not True:
+            if kind == "folder":  # nobody else sees it: the reason to ask is what it takes with it (QA D17)
+                raise ExchangeError("confirm_delete", target=target)
             raise ExchangeError("confirm", target=target, outcome=UNDONE.get(kind, "Nothing was done."))
 
     def check(

@@ -75,3 +75,27 @@ def test_names_from_mail_never_become_paths_or_options():
     assert safe_name("-rf") == "file"
     assert safe_name("a/b/report's.pdf") == "reports.pdf"
     assert safe_name("$(rm -rf).pdf") == "(rm -rf).pdf"
+
+
+async def test_uploading_the_same_file_twice_attaches_it_once(ews, cred):
+    """QA D5: a second curl with the same link added the file again, and the copy reached the recipient."""
+    from test_mail import MARK
+
+    from exchange_mcp.auth.credential import person_key
+    from exchange_mcp.core import context
+
+    sealer = LocalSealer([("k1", os.urandom(32))])
+    client = app_for(ews, sealer)
+    draft = (
+        '<m:Items><t:Message><t:ItemId Id="D1" ChangeKey="C"/><t:IsDraft>true</t:IsDraft>{mark}{atts}'
+        "</t:Message></m:Items>"
+    )
+    has = '<t:Attachments><t:FileAttachment><t:AttachmentId Id="A1"/><t:Name>a.txt</t:Name></t:FileAttachment></t:Attachments>'
+    ews.on("GetItem", ok("GetItem", draft.format(mark=MARK, atts="")), ok("GetItem", draft.format(mark=MARK, atts=has)))
+    ews.on("CreateAttachment", ok("CreateAttachment"))
+    link = await context.runtime().links.upload(cred, person_key(cred.login), "D1", "attach", "a.txt")
+    path = link["url"].replace(PUBLIC, "")
+    first = await client.put(path, content=b"hello")
+    second = await client.put(path, content=b"hello")
+    assert first.status_code == 200 and second.status_code == 200 and second.json().get("already") is True
+    assert ews.ops().count("CreateAttachment") == 1

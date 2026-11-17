@@ -126,3 +126,25 @@ async def test_a_failed_room_list_is_an_error(rt, ews, invoke):
     )
     r = await invoke("list_people", source="rooms")
     assert r.is_error and "does not let you" in r.text
+
+
+async def test_a_contact_with_three_addresses_is_one_row_with_its_name(rt, ews, invoke):
+    """QA D12: ResolveNames answers once per address of a contact, each named by that address."""
+    rows = "".join(
+        f"<t:Resolution><t:Mailbox><t:Name>{a}</t:Name><t:EmailAddress>{a}</t:EmailAddress>"
+        '<t:MailboxType>Contact</t:MailboxType><t:ItemId Id="C1" ChangeKey="K"/></t:Mailbox>'
+        "<t:Contact><t:DisplayName>Pat Friend</t:DisplayName><t:JobTitle>Buyer</t:JobTitle></t:Contact></t:Resolution>"
+        for a in ("pat@home.example", "pat@work.example", "pat@old.example")
+    )
+    ews.on(
+        "ResolveNames",
+        ok(
+            "ResolveNames",
+            f'<m:ResolutionSet TotalItemsInView="3" IncludesLastItemInRange="true">{rows}</m:ResolutionSet>',
+        ),
+    )
+    r = await invoke("list_people", query="pat", source="contacts")
+    assert not r.is_error, r.text
+    assert len(r.data["items"]) == 1
+    row = r.data["items"][0]
+    assert row["name"] == "Pat Friend" and row["id"] == "C1" and row["title"] == "Buyer"

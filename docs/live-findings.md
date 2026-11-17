@@ -15,6 +15,12 @@ answers in the measured shape. No host, address or person of the installation go
 | Meetings: create, weekly repeat read back, invitation, move, cancel; free/busy and slots | 2016 CU23 | as built | tests/unit/test_calendar.py |
 | `DeleteItem` of a task with `AffectedTaskOccurrences=SpecifiedOccurrenceOnly` | 2016 CU23 | `ErrorCannotDeleteTaskOccurrence`; `AllOccurrences` works | tests/unit/test_tasks.py::test_a_task_is_deleted_whole |
 | Contacts and tasks: create, find, complete, delete | 2016 CU23 | as built after the two fixes above | tests/unit/test_contacts.py, test_tasks.py |
+| `SetUserOofSettings` without `InternalReply` and `ExternalReply` | 2016 CU23 | `ErrorInvalidUserOofSettings`: both are required in every request; turning the reply off sends the saved texts back | tests/unit/test_review_fixes.py::test_turning_the_automatic_reply_off_keeps_its_texts |
+| NTLM legs of parallel calls on one shared connection pool | 2016 CU23, two front ends | 14 of 30 parallel calls answered 401 ("sign in again"); one connection per NTLM call: 0 of 30 | tests/unit/test_ews.py::test_ntlm_calls_run_on_a_client_of_their_own |
+| `GetItem` of an occurrence of a series | 2016 CU23 | no `Recurrence` on the occurrence; the master (`RecurringMasterItemId`) has it | tests/unit/test_calendar.py::test_an_occurrence_describes_its_series |
+| `ResolveNames` over Contacts for a contact with several addresses | 2016 CU23 | one resolution per address, each named by that address | tests/unit/test_people.py::test_a_contact_with_three_addresses_is_one_row_with_its_name |
+| `ItemShape/MaximumBodySize` | 2016 CU23 | counted in characters, not kilobytes: 64 returned 64 characters of HTML | tests/unit/test_qa_mail.py::test_a_preview_is_built_from_the_body_without_hidden_text |
+| Online archive filled by an archive policy | 2016 CU23 | mail sits in a top-level copy of the mailbox's folders under their localized names; the distinguished `archiveinbox` is empty | tests/unit/test_qa_mail.py::test_the_archive_inbox_is_the_copy_of_the_mailbox_tree |
 | `FindItem` on tasks with a restriction on `task:Status` | 2016 CU23 | `ErrorInvalidValueForProperty`; `task:IsComplete` works instead | tests/unit/test_tasks.py::test_list_tasks_filters_open_tasks |
 
 ## Verify on the first live run

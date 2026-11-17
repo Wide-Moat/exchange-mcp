@@ -14,6 +14,7 @@ from lxml import etree
 from exchange_mcp.ews.client import Ews
 from exchange_mcp.ews.common import (
     DRAFT_PROPERTY_NAME,
+    DRAFT_PROPERTY_SET,
     Page,
     draft_marker,
     draft_marker_uri,
@@ -25,6 +26,8 @@ from exchange_mcp.ews.common import (
 )
 from exchange_mcp.ews.soap import M, T, find, findall, flag, text
 
+# No item:Preview: Exchange builds it from the raw body, hidden text included (QA D4). Previews are made
+# from the body by the same reader get_message uses, one batched GetItem per page (`bodies`).
 LIST_FIELDS = (
     "item:Subject",
     "item:DateTimeReceived",
@@ -32,7 +35,6 @@ LIST_FIELDS = (
     "item:HasAttachments",
     "item:Importance",
     "item:Categories",
-    "item:Preview",
     "item:Flag",
     "item:ConversationId",
     "item:ParentFolderId",
@@ -41,8 +43,53 @@ LIST_FIELDS = (
 )
 
 
-def _fields(*uris: str) -> etree._Element:
-    return T.AdditionalProperties(*[T.FieldURI(FieldURI=u) for u in uris])
+# The From and Sender addresses as SMTP (PidTagSentRepresentingSmtpAddress, PidTagSenderSmtpAddress). For a
+# sender inside the organisation, message:From carries the X.500 DN (/O=.../CN=RECIPIENTS/...), which is not an
+# address a person can use (QA D9); the store keeps the SMTP form beside it on delivered and sent mail.
+FROM_SMTP = 0x5D02
+SENDER_SMTP = 0x5D01
+# MaximumBodySize for previews. Live (2016 CU23): Exchange counts CHARACTERS, not kilobytes; 64 returned
+# 64 characters of HTML, all of it head. 32,000 characters hold the start of a styled letter's text.
+BODY_CHARS = 32_000
+
+# The online archive's own well-known folders (DistinguishedFolderId, Exchange 2013 SP1 / 15.00.0913.09 and
+# later). A name inside the archive is looked up in its tree; these answer without a FindFolder, in any
+# language the archive's folders are named in (QA D3).
+ARCHIVE_WELL_KNOWN = {
+    "inbox": "archiveinbox",
+    "archive": "archiveinbox",
+    "deleted": "archivedeleteditems",
+    "root": "archivemsgfolderroot",
+}
+_ARCHIVE_IDS = frozenset(ARCHIVE_WELL_KNOWN.values())
+
+
+def _folder_id(value: str) -> etree._Element:
+    return T.DistinguishedFolderId(Id=value) if value in _ARCHIVE_IDS else folder_id(value)
+
+
+def _fields(*uris: str, smtp: bool = False) -> etree._Element:
+    props = T.AdditionalProperties(*[T.FieldURI(FieldURI=u) for u in uris])
+    if smtp:
+        for tag in (FROM_SMTP, SENDER_SMTP):
+            props.append(T.ExtendedFieldURI(PropertyTag=hex(tag), PropertyType="String"))
+    return props
+
+
+def _extended(el: etree._Element, tag: int) -> str:
+    for p in findall(el, "t:ExtendedProperty"):
+        uri = p.find("{*}ExtendedFieldURI")
+        raw = uri.get("PropertyTag", "") if uri is not None else ""
+        try:
+            if raw and int(raw, 16 if raw.lower().startswith("0x") else 10) == tag:
+                return text(p, "t:Value")
+        except ValueError:
+            continue
+    return ""
+
+
+def _from_smtp(el: etree._Element) -> str:
+    return _extended(el, FROM_SMTP) or _extended(el, SENDER_SMTP)
 
 
 @dataclass
@@ -52,7 +99,6 @@ class Listing:
     received: str
     sender: dict[str, str]
     to_display: str
-    preview: str
     unread: bool
     flag: str
     categories: list[str]
@@ -60,6 +106,8 @@ class Listing:
     has_attachments: bool
     conversation: str
     folder: str
+    sender_smtp: str = ""
+    html: str = ""
 
 
 def _listing(el: etree._Element) -> Listing:
@@ -69,7 +117,6 @@ def _listing(el: etree._Element) -> Listing:
         received=text(el, "t:DateTimeReceived"),
         sender=mailbox(find(el, "t:From/t:Mailbox")),
         to_display=text(el, "t:DisplayTo"),
-        preview=text(el, "t:Preview"),
         unread=not flag(el, "t:IsRead"),
         flag=text(el, "t:Flag/t:FlagStatus", "NotFlagged"),
         categories=[c.text or "" for c in findall(el, "t:Categories/t:String")],
@@ -77,6 +124,8 @@ def _listing(el: etree._Element) -> Listing:
         has_attachments=flag(el, "t:HasAttachments"),
         conversation=(find(el, "t:ConversationId").get("Id") if find(el, "t:ConversationId") is not None else ""),
         folder=(find(el, "t:ParentFolderId").get("Id") if find(el, "t:ParentFolderId") is not None else ""),
+        sender_smtp=_from_smtp(el),
+        html=text(el, "t:Body"),
     )
 
 
@@ -120,7 +169,7 @@ async def find_messages(
     has_attachments: bool,
 ) -> tuple[list[Listing], Page]:
     body = M.FindItem(
-        M.ItemShape(T.BaseShape("IdOnly"), _fields(*LIST_FIELDS)),
+        M.ItemShape(T.BaseShape("IdOnly"), _fields(*LIST_FIELDS, smtp=True)),
         paged_view(offset, limit),
         Traversal="Shallow",
     )
@@ -128,17 +177,47 @@ async def find_messages(
         # AQS and a Restriction cannot be combined: with a query, every filter travels in the query
         # except unread, which the tool applies to the page (the page may come back shorter).
         body.append(M.SortOrder(T.FieldOrder(T.FieldURI(FieldURI="item:DateTimeReceived"), Order="Descending")))
-        body.append(M.ParentFolderIds(folder_id(folder)))
+        body.append(M.ParentFolderIds(_folder_id(folder)))
         body.append(M.QueryString(aqs))
     else:
         r = _restriction(unread_only, since, until, has_attachments)
         if r is not None:
             body.append(r)
         body.append(M.SortOrder(T.FieldOrder(T.FieldURI(FieldURI="item:DateTimeReceived"), Order="Descending")))
-        body.append(M.ParentFolderIds(folder_id(folder)))
+        body.append(M.ParentFolderIds(_folder_id(folder)))
     messages = await ews.call(body)
     page = page_of(messages[0], "t:Items", offset, limit)
     return [_listing(e) for e in page.elements], page
+
+
+def _body_shape(*uris: str, smtp: bool = False) -> etree._Element:
+    # Schema order of ItemResponseShapeType: BaseShape, BodyType, ..., MaximumBodySize, AdditionalProperties.
+    return M.ItemShape(
+        T.BaseShape("IdOnly"),
+        T.BodyType("HTML"),
+        T.MaximumBodySize(str(BODY_CHARS)),
+        _fields(*uris, "item:Body", smtp=smtp),
+    )
+
+
+async def bodies(ews: Ews, ids: list[str]) -> dict[str, str]:
+    """The HTML bodies of a page of messages, in one GetItem, cut by Exchange at BODY_CHARS characters."""
+    if not ids:
+        return {}
+    messages = await ews.call(M.GetItem(_body_shape(), item_ids(ids)))
+    out = {}
+    for m in messages:
+        for it in findall(m, "m:Items/*"):
+            out[it.find("{*}ItemId").get("Id")] = text(it, "t:Body")
+    return out
+
+
+async def listings(ews: Ews, ids: list[str]) -> list[Listing]:
+    """Messages by id with the fields of a list entry and their bodies, in one GetItem."""
+    if not ids:
+        return []
+    messages = await ews.call(M.GetItem(_body_shape(*LIST_FIELDS, smtp=True), item_ids(ids)))
+    return [_listing(it) for m in messages for it in findall(m, "m:Items/*")]
 
 
 @dataclass
@@ -171,6 +250,8 @@ class Message:
     importance: str
     conversation: str
     attachments: list[Attachment] = field(default_factory=list)
+    sender_smtp: str = ""
+    size: int = 0
 
 
 def _recipients(el: etree._Element, path: str) -> list[dict[str, str]]:
@@ -192,9 +273,13 @@ def _message(el: etree._Element) -> Message:
                 kind="file" if etree.QName(a).localname == "FileAttachment" else "item",
             )
         )
-    ours = (
-        any(p.get("PropertyName") == DRAFT_PROPERTY_NAME for p in el.iter("{*}ExtendedFieldURI"))
-        and text(el, "t:ExtendedProperty/t:Value") == "1"
+    # The marker is looked up by its own name: the message carries other extended properties beside it.
+    ours = any(
+        (uri := p.find("{*}ExtendedFieldURI")) is not None
+        and uri.get("PropertyName") == DRAFT_PROPERTY_NAME
+        and uri.get("PropertySetId", "").lower() == DRAFT_PROPERTY_SET
+        and text(p, "t:Value") == "1"
+        for p in findall(el, "t:ExtendedProperty")
     )
     conv = find(el, "t:ConversationId")
     return Message(
@@ -216,6 +301,8 @@ def _message(el: etree._Element) -> Message:
         importance=text(el, "t:Importance", "Normal"),
         conversation=conv.get("Id") if conv is not None else "",
         attachments=atts,
+        sender_smtp=_from_smtp(el),
+        size=int(text(el, "t:Size")) if text(el, "t:Size").isdigit() else 0,
     )
 
 
@@ -230,6 +317,7 @@ async def get_message(ews: Ews, item: str, *, body: bool = True) -> Message:
         "item:Importance",
         "item:Flag",
         "item:ConversationId",
+        "item:Size",
         "message:From",
         "message:ToRecipients",
         "message:CcRecipients",
@@ -238,7 +326,7 @@ async def get_message(ews: Ews, item: str, *, body: bool = True) -> Message:
     ]
     if body:
         uris.append("item:Body")
-    shape = M.ItemShape(T.BaseShape("IdOnly"), T.BodyType("HTML"), _fields(*uris))
+    shape = M.ItemShape(T.BaseShape("IdOnly"), T.BodyType("HTML"), _fields(*uris, smtp=True))
     shape[-1].append(draft_marker_uri())
     messages = await ews.call(M.GetItem(shape, M.ItemIds(T.ItemId(Id=item))))
     found = findall(messages[0], "m:Items/*")
@@ -250,18 +338,26 @@ async def get_message(ews: Ews, item: str, *, body: bool = True) -> Message:
 
 
 async def conversation(ews: Ews, conversation_id: str, limit: int) -> list[Listing]:
+    """The messages of a conversation, newest first, with the fields of a list entry.
+
+    Live (2016 CU23): GetConversationItems answered with ItemId and IsRead only, whatever ItemProperties
+    asked for (QA D10). It is used for the ids; the fields and bodies come from one GetItem."""
     messages = await ews.call(
         M.GetConversationItems(
-            M.ItemProperties(T.BaseShape("IdOnly"), _fields(*LIST_FIELDS)),
+            M.ItemProperties(T.BaseShape("IdOnly")),
             M.FoldersToIgnore(T.DistinguishedFolderId(Id="deleteditems"), T.DistinguishedFolderId(Id="drafts")),
             M.MaxItemsToReturn(str(limit)),
             M.SortOrder("DateOrderDescending"),
             M.Conversations(T.Conversation(T.ConversationId(Id=conversation_id))),
         )
     )
-    out = []
+    ids = []
     for item in findall(messages[0], "m:Conversation/t:ConversationNodes/t:ConversationNode/t:Items/*"):
-        out.append(_listing(item))
+        iid = item.find("{*}ItemId")
+        if iid is not None and iid.get("Id") not in ids:
+            ids.append(iid.get("Id"))
+    out = await listings(ews, ids[: limit * 2])
+    out.sort(key=lambda m: m.received, reverse=True)
     return out[:limit]
 
 
@@ -549,6 +645,8 @@ async def oof(ews: Ews, me: str) -> dict[str, str]:
         "external_audience": text(r, ".//t:ExternalAudience", "None").lower(),
         "start": text(r, ".//t:Duration/t:StartTime"),
         "end": text(r, ".//t:Duration/t:EndTime"),
+        "internal": text(r, ".//t:InternalReply/t:Message"),
+        "external": text(r, ".//t:ExternalReply/t:Message"),
     }
 
 
@@ -558,18 +656,18 @@ async def set_oof(
     *,
     state: str,
     audience: str,
-    internal: str | None,
-    external: str | None,
+    internal: str,
+    external: str,
     start: str | None,
     end: str | None,
 ) -> None:
     settings = T.UserOofSettings(T.OofState(state), T.ExternalAudience(audience))
     if start and end:
         settings.append(T.Duration(T.StartTime(start), T.EndTime(end)))
-    if internal is not None:  # absent: Exchange keeps the saved reply texts
-        settings.append(T.InternalReply(T.Message(internal)))
-    if external is not None:
-        settings.append(T.ExternalReply(T.Message(external)))
+    # Live (2016 CU23): both replies must be present, or Exchange answers ErrorInvalidUserOofSettings.
+    # To change only the state, send the saved texts back unchanged.
+    settings.append(T.InternalReply(T.Message(internal)))
+    settings.append(T.ExternalReply(T.Message(external)))
     await ews.call(M.SetUserOofSettingsRequest(T.Mailbox(T.Address(me)), settings))
 
 
@@ -608,7 +706,7 @@ async def folder_tree(ews: Ews, root: str) -> list[RawFolder]:
                     ),
                 ),
                 M.IndexedPageFolderView(MaxEntriesReturned=str(FOLDER_PAGE), Offset=str(offset), BasePoint="Beginning"),
-                M.ParentFolderIds(folder_id(root)),
+                M.ParentFolderIds(_folder_id(root)),
                 Traversal="Deep",
             )
         )
@@ -636,3 +734,14 @@ async def folder_tree(ews: Ews, root: str) -> list[RawFolder]:
 
             return partial(out, True)
         offset += len(page)
+
+
+async def folder_name(ews: Ews, distinguished: str) -> str:
+    """The display name of one of the mailbox's well-known folders, in the mailbox's own language."""
+    messages = await ews.call(
+        M.GetFolder(
+            M.FolderShape(T.BaseShape("IdOnly"), _fields("folder:DisplayName")),
+            M.FolderIds(T.DistinguishedFolderId(Id=distinguished)),
+        )
+    )
+    return text(messages[0], "m:Folders/*/t:DisplayName")

@@ -58,7 +58,13 @@ async def list_people(
             # Live (2016 CU23): a Contains restriction on contact fields matches only a whole address;
             # ResolveNames over Contacts finds part of a name or an address, as Outlook does.
             found = await ep.resolve_names(c.ews, q, contacts_only=True)
-            every = [f for f in found if f.source == "contacts"]
+            # One contact with three addresses resolves three times: one row per contact (QA D12).
+            seen: set[str] = set()
+            every = []
+            for f in found:
+                if f.source == "contacts" and (f.id or f.address) not in seen:
+                    seen.add(f.id or f.address)
+                    every.append(f)
             cut = getattr(found, "truncated", False)
         elif source == "rooms":
             every = await ep.rooms(c.ews)

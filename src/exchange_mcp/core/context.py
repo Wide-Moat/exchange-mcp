@@ -22,6 +22,7 @@ from exchange_mcp.config import Settings
 from exchange_mcp.core.cursor import Cursors
 from exchange_mcp.core.errors import ExchangeError
 from exchange_mcp.core.guard import Guard
+from exchange_mcp.core.time import windows_zone
 from exchange_mcp.ews.client import Ews
 from exchange_mcp.keys.seal import Sealer
 
@@ -103,5 +104,7 @@ async def call(tool: str) -> AsyncIterator[Call]:
     cred = await _credential(rt)
     if cred is None:
         raise ExchangeError("reconnect", signin=f"{rt.settings.public_url}/signin")
-    ews = Ews(rt.http, rt.settings.ews_url, cred.auth(), timezone_id=None)
+    # The person's zone, so the text Exchange writes itself (the header quoted in a reply or a forward)
+    # shows local time, not UTC (QA D20). Times this server sends and reads stay explicit UTC.
+    ews = Ews(rt.http, rt.settings.ews_url, cred.auth(), timezone_id=windows_zone(rt.settings.timezone))
     yield Call(tool=tool, person=person_key(cred.login), cred=cred, ews=ews, rt=rt)

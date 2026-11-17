@@ -106,6 +106,12 @@ async def _store(link: dict, cred: Credential, data: bytes) -> Response:
             return _deny()
         if link["o"] == "attach":
             name = safe_name(link["n"])
+            # One link, one file: uploading again (a retried curl, a second run) must not attach it twice.
+            # The draft is the record, so this holds across replicas: a file of this name is already there.
+            if any(a.name == name and not a.inline for a in draft.attachments):
+                return JSONResponse(
+                    {"attached": name, "already": True, "next": "It is already on the draft; nothing was added."}
+                )
             ctype = mimetypes.guess_type(name)[0] or "application/octet-stream"
             await em.add_attachment(ews, draft.id, name, ctype, data)
             return JSONResponse({"attached": name, "size": len(data), "next": "Show the draft again with save_draft."})

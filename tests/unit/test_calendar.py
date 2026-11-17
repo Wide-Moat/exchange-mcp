@@ -418,3 +418,37 @@ def test_the_utc_zone_has_two_distinct_transitions():
     std, dst = z.find("{*}StandardTime"), z.find("{*}DaylightTime")
     assert std.find("{*}Month").text != dst.find("{*}Month").text
     assert {e.text for e in z.iter("{*}Bias")} == {"0"}
+
+
+async def test_an_occurrence_describes_its_series(rt, ews, invoke):
+    """QA D14: an occurrence carries no Recurrence; the pattern is read from its master."""
+    occ = event_xml("OCC1").replace(
+        "<t:CalendarItemType>Single</t:CalendarItemType>", "<t:CalendarItemType>Occurrence</t:CalendarItemType>"
+    )
+    master = (
+        '<m:Items><t:CalendarItem><t:ItemId Id="M1" ChangeKey="K"/><t:Recurrence><t:WeeklyRecurrence>'
+        "<t:Interval>1</t:Interval><t:DaysOfWeek>Tuesday</t:DaysOfWeek></t:WeeklyRecurrence>"
+        "<t:NumberedRecurrence><t:StartDate>2026-11-17</t:StartDate><t:NumberOfOccurrences>3</t:NumberOfOccurrences>"
+        "</t:NumberedRecurrence></t:Recurrence></t:CalendarItem></m:Items>"
+    )
+    ews.on("GetItem", ok("GetItem", f"<m:Items>{occ}</m:Items>"), ok("GetItem", master))
+    r = await invoke("get_event", id="OCC1", include_body=False)
+    assert not r.is_error, r.text
+    assert "week" in r.data["repeats"].lower() and "3" in r.data["repeats"]
+    assert 'OccurrenceId="OCC1"' in ews.last("GetItem").xml()
+
+
+async def test_someone_elses_organiser_and_location_are_marked(rt, ews, invoke):
+    """QA D6: the organiser writes the location and their own name; both reach the model marked as data."""
+    ews.on("GetItem", got(mine=False, attendees=1))
+    r = await invoke("get_event", id="E1", include_body=False)
+    assert not r.is_error, r.text
+    assert r.data["location"].startswith("<<<text ") and "Room 1" in r.data["location"]
+    assert r.data["organiser"].startswith("<<<text ")
+
+
+async def test_requests_carry_the_persons_time_zone(rt, ews, invoke):
+    """QA D20: Exchange writes the quoted header of a reply in the request's time zone."""
+    ews.on("GetItem", got())
+    await invoke("get_event", id="E1", include_body=False)
+    assert 'TimeZoneDefinition Id="W. Europe Standard Time"' in ews.last("GetItem").xml()

@@ -211,7 +211,19 @@ async def get_event(ews: Ews, item: str, *, body: bool = True) -> Event:
         from exchange_mcp.core.errors import invalid
 
         raise invalid("That id is not a calendar event. Find events with list_events. Nothing was done.")
-    return _event(found[0])
+    ev = _event(found[0])
+    if ev.kind in ("Occurrence", "Exception") and not ev.recurrence:
+        # An occurrence carries no Recurrence of its own (QA, live): the series' pattern is on its master.
+        master = await ews.call(
+            M.GetItem(
+                M.ItemShape(T.BaseShape("IdOnly"), _fields("calendar:Recurrence")),
+                M.ItemIds(T.RecurringMasterItemId(OccurrenceId=item)),
+            )
+        )
+        ms = findall(master[0], "m:Items/t:CalendarItem")
+        if ms:
+            ev.recurrence = describe_recurrence(find(ms[0], "t:Recurrence"))
+    return ev
 
 
 # ---------------------------------------------------------------- recurrence

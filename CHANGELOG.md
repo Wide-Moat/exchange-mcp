@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.1.1
+
+Fixes from a QA run of 131 cases on Exchange Server 2016 CU23.
+
+| Area | Fixed |
+|---|---|
+| Automatic reply | turning it off failed every time: Exchange requires both reply texts in each request, so the saved texts are sent back with the new state |
+| Sign-in | parallel calls sometimes answered "sign in again": NTLM legs of different calls shared pooled connections (fixed in 0.1.0; measured 14 of 30 before, 0 of 30 after) |
+| Archive | `archive=true` found nothing: the archive's mail sits in a copy of the mailbox's tree under its localized names |
+| Previews | built from the body without hidden text, no longer Exchange's own preview (which kept it); `MaximumBodySize` is in characters |
+| Attachments | uploading again through the same link no longer attaches the file twice |
+| Text from others | organiser, location and names are marked or reduced to one bounded line |
+| Mail lists | `folder` on each message, `to` as names with a count, SMTP instead of X.500 addresses, sender filter by address, thread entries with previews, folder subtrees |
+| Calendar | an occurrence describes its series; replies and forwards quote times in the person's zone |
+| People | a contact with several addresses is one row under its own name; candidates carry their title |
+| Messages | why a folder delete needs confirmation; an automatic reply already past is refused with its reason; times returned with their offset |
+
 ## 0.1.0
 
 The first release: one person's on-premises Exchange mailbox for an AI assistant, through EWS.

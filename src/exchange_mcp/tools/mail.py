@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import re
+from datetime import UTC, datetime
 from typing import Annotated, Any, Literal
 
 from pydantic import Field
 
 from exchange_mcp.core import resolve
-from exchange_mcp.core.content import content_block, name
+from exchange_mcp.core.content import content_block, content_line, name
 from exchange_mcp.core.context import call
 from exchange_mcp.core.errors import ExchangeError, invalid
 from exchange_mcp.core.guard import MAX_RECIPIENTS
@@ -28,6 +29,11 @@ UNDO_DELETE = "list_messages folder=deleted, then update_messages action=move"
 CHECKS_FAILED = "Exchange did not answer the recipient checks; the draft is saved."
 BODY_CHARS = 20_000
 THREAD_MAX = 10
+PREVIEW_CHARS = 255
+NAME_CHARS = 80
+TO_SHOWN = 5
+DN_LOOKUPS = 10  # Exchange DNs resolved to SMTP per call; beyond that the address is left out
+NO_PREVIEWS = "Exchange did not return the message bodies, so there are no previews; get_message reads one."
 _FILE_NAME = re.compile(r"^[^/\\\x00-\x1f]{1,200}$")
 ID = Annotated[str, Field(description="The id exactly as a mail tool returned it.", min_length=1, max_length=512)]
 
@@ -42,24 +48,109 @@ def _received(m: em.Listing):
     return dt if dt.tzinfo else dt.replace(tzinfo=UTC)
 
 
-def _listing(c, m: em.Listing, tz) -> dict[str, Any]:
+def _words(text: str, limit: int) -> str:
+    """At most `limit` characters, cut between words and said with an ellipsis, never inside a word."""
+    text = " ".join(text.split())
+    if len(text) <= limit:
+        return text
+    cut = text[: limit - 1]
+    return (cut.rsplit(" ", 1)[0] if " " in cut else cut) + "…"
+
+
+def _name(text: str | None) -> str | None:
+    """A display name written by someone else: one line, defanged, at most 80 characters, whole words."""
+    return name(_words(str(text), NAME_CHARS)) if text else None  # cut between words before name() caps
+
+
+def _preview(html: str) -> str | None:
+    text = _words(html_to_text(html), PREVIEW_CHARS) if html else ""
+    return content_block("the sender", text) if text else None
+
+
+class _Addresses:
+    """SMTP addresses for the senders and recipients of one call. Exchange names a sender inside the
+    organisation by an X.500 DN; that is never shown. The SMTP form comes from the message itself when the
+    store kept it, else from ResolveNames (once per DN per call, at most DN_LOOKUPS), else it is left out."""
+
+    def __init__(self, c) -> None:
+        self.c = c
+        self.known: dict[str, str | None] = {}
+
+    async def of(self, mailbox: dict[str, str], smtp: str = "") -> str | None:
+        a = (mailbox.get("address") or "").strip()
+        if resolve.ADDRESS.match(a):
+            return a
+        if resolve.ADDRESS.match(smtp or ""):
+            return smtp
+        if not a:
+            return None
+        if a not in self.known:
+            if len(self.known) >= DN_LOOKUPS:
+                return None
+            self.known[a] = await resolve.address_of_dn(self.c.ews, a)
+        return self.known[a]
+
+
+async def _listing(addresses: _Addresses, m: em.Listing, tz, folder: str | None, preview: str | None) -> dict:
+    names = [n for n in (_name(x) for x in m.to_display.split(";")) if n]
     return compact(
         {
             "id": m.id,
+            "folder": folder,
             "received": local(m.received, tz),
-            "from": name(m.sender.get("name")) or m.sender.get("address"),
-            "from_address": m.sender.get("address"),
-            "to": name(m.to_display[:200]),
+            "from": _name(m.sender.get("name")) or await addresses.of(m.sender, m.sender_smtp),
+            "from_address": await addresses.of(m.sender, m.sender_smtp),
+            "to": names[:TO_SHOWN],
+            "to_total": len(names) if len(names) > TO_SHOWN else None,
             "subject": content_block("the sender (subject)", m.subject) if m.subject else None,
-            "preview": content_block("the sender", m.preview[:255]) if m.preview else None,
+            "preview": preview,
             "unread": m.unread,
             "flag": m.flag.lower() if m.flag != "NotFlagged" else None,
-            "categories": m.categories,
+            "categories": [x for x in (_name(k) for k in m.categories) if x],
             "importance": m.importance.lower() if m.importance != "Normal" else None,
             "has_attachments": m.has_attachments,
             "conversation": m.conversation,
         }
     )
+
+
+async def _sender_search(c, sender: str) -> tuple[str, str | None, str | None]:
+    """The AQS term for `sender`, and the exact address and name a found message must match.
+
+    AQS `from:` on Exchange matches display names, not the SMTP address of a sender inside the organisation,
+    whose From holds an X.500 DN: `from:me@corp` finds none of one's own mail (QA D7). A Restriction cannot
+    stand in, because FindItem takes a Restriction or a QueryString, never both, and a restriction on
+    message:From compares the stored address, SMTP for some senders and the DN for others. So an address
+    that belongs to someone in the address book (or to the person) is searched by their display name, and the
+    page is then filtered to the exact address, so a namesake elsewhere does not pass. An address outside
+    the organisation is stored as SMTP and searched as typed."""
+    s = sender.strip()
+    if not resolve.ADDRESS.match(s):
+        return f'from:"{s.replace(chr(34), "")}"', None, None
+    if s.lower() == c.me.lower():
+        owner_name, address = c.cred.name, c.me
+    else:
+        owner = await resolve.owner_of(c.ews, s)
+        owner_name, address = (owner.name, owner.address) if owner else (None, s)
+    term = (owner_name or s).replace(chr(34), "")
+    return f'from:"{term}"', address.lower(), owner_name
+
+
+async def _from_matches(addresses: _Addresses, m: em.Listing, address: str, owner_name: str | None) -> bool:
+    shown = await addresses.of(m.sender, m.sender_smtp)
+    if shown:
+        return shown.lower() == address
+    # The DN could not be turned into an address: the name the search was made by decides.
+    return bool(owner_name) and (m.sender.get("name") or "").strip().lower() == owner_name.lower()
+
+
+async def _previews(c, found: list[em.Listing]) -> tuple[dict[str, str], bool]:
+    try:
+        return await em.bodies(c.ews, [m.id for m in found]), True
+    except ExchangeError as e:
+        if e.key == "reconnect":
+            raise
+        return {}, False
 
 
 @tool(area="mail", title="Find mail", read_only=True, idempotent=True, returns_list=True)
@@ -70,7 +161,10 @@ async def list_messages(
     ] = "messages",
     folder: Annotated[
         str | None,
-        Field(description="inbox, sent, drafts, deleted, junk, archive, a folder name or a path like Inbox/Projects."),
+        Field(
+            description="inbox, sent, drafts, deleted, junk, archive, a folder name or a path like Inbox/Projects. "
+            "With kind=folders, the folders inside it."
+        ),
     ] = None,
     query: Annotated[
         str | None,
@@ -81,7 +175,9 @@ async def list_messages(
     since: Annotated[str | None, Field(description="Received at or after this local time, 2026-11-17 09:00.")] = None,
     until: Annotated[str | None, Field(description="Received before this local time.")] = None,
     has_attachments: bool = False,
-    archive: Annotated[bool, Field(description="Search the online archive instead of the mailbox.")] = False,
+    archive: Annotated[
+        bool, Field(description="Search the online archive instead of the mailbox; its inbox unless folder says.")
+    ] = False,
     limit: Annotated[int | None, Field(description="How many, 1 to 25; 10 by default.")] = None,
     cursor: Annotated[str | None, Field(description="The cursor from the previous page.")] = None,
 ) -> dict[str, Any]:
@@ -93,13 +189,17 @@ async def list_messages(
         n, extra = clamp_limit(limit)
         tz = c.tz
         if kind == "folders":
-            scope = {"k": "folders", "a": archive}
+            scope = {"k": "folders", "a": archive, "f": folder or ""}
             start = (await c.cursor_in(cursor, scope) or {}).get("o", 0)
-            tree = await resolve.folder_tree(c.ews, "archivemsgfolderroot" if archive else "msgfolderroot")
+            root, prefix = "archivemsgfolderroot" if archive else "msgfolderroot", ""
+            if folder:  # that folder's subtree, with paths that start at it
+                at = await resolve.locate(c.ews, folder, archive=archive)
+                root, prefix = at.id, at.label + "/"
+            tree = await resolve.folder_tree(c.ews, root)
             cut = getattr(tree, "truncated", False)
             tree.sort(key=lambda f: f.path.lower())
             rows = [
-                compact({"path": f.path, "unread": f.unread, "total": f.total, "subfolders": f.children})
+                compact({"path": prefix + f.path, "unread": f.unread, "total": f.total, "subfolders": f.children})
                 for f in tree[start : start + n]
             ]
             nxt = await c.cursor_out({"o": start + n} if start + n < len(tree) else None, scope)
@@ -108,7 +208,7 @@ async def list_messages(
                 out["truncated"] = "The mailbox has more folders than this connector reads; find one by name."
             return out
 
-        where = folder or ("archive" if archive else "inbox")
+        where = folder or "inbox"
         scope = {
             "f": where,
             "r": archive,
@@ -120,16 +220,19 @@ async def list_messages(
             "h": has_attachments,
         }
         start = (await c.cursor_in(cursor, scope) or {}).get("o", 0)
-        fid = await resolve.folder(c.ews, where, archive=archive)
+        at = await resolve.locate(c.ews, where, archive=archive)
+        addresses = _Addresses(c)
         since_dt = parse(since, tz, field="since") if since else None
         until_dt = parse(until, tz, field="until") if until else None
         s = ews_time(parse(since, tz, field="since")) if since else None
         u = ews_time(parse(until, tz, field="until")) if until else None
         aqs = None
+        from_address = from_name = None
         if query or sender:
             terms = [query.strip()] if query else []
             if sender:
-                terms.append(f'from:"{sender.replace(chr(34), "")}"')
+                term, from_address, from_name = await _sender_search(c, sender)
+                terms.append(term)
             if since:
                 terms.append(f"received>={parse(since, tz).date().isoformat()}")
             if until:
@@ -140,7 +243,7 @@ async def list_messages(
             aqs = " ".join(terms)
         found, page = await em.find_messages(
             c.ews,
-            fid,
+            at.id,
             offset=start,
             limit=n,
             aqs=aqs,
@@ -159,9 +262,15 @@ async def list_messages(
                 and (since_dt is None or _received(m) is None or _received(m) >= since_dt)
                 and (until_dt is None or _received(m) is None or _received(m) < until_dt)
             ]
-        rows = [_listing(c, m, tz) for m in found]
+        if from_address:
+            found = [m for m in found if await _from_matches(addresses, m, from_address, from_name)]
+        html, got = await _previews(c, found)
+        rows = [await _listing(addresses, m, tz, at.label, _preview(html.get(m.id, ""))) for m in found]
         nxt = await c.cursor_out({"o": page.next_offset} if page.next_offset is not None else None, scope)
-        return page_result(rows, nxt, total=page.total, **extra)
+        out = page_result(rows, nxt, total=page.total, archive=archive or None, **extra)
+        if found and not got:
+            out["previews"] = NO_PREVIEWS
+        return out
 
 
 @tool(area="mail", title="Read a message", read_only=True, idempotent=True)
@@ -177,11 +286,16 @@ async def get_message(
     async with call("get_message") as c:
         m = await em.get_message(c.ews, id, body=include_body)
         tz = c.tz
+        addresses = _Addresses(c)
+
+        async def person(r: dict[str, str], smtp: str = "") -> dict[str, str]:
+            return compact({"name": _name(r.get("name")), "address": await addresses.of(r, smtp)})
+
         out: dict[str, Any] = {
             "id": m.id,
-            "from": compact({"name": name(m.sender.get("name")), "address": m.sender.get("address")}),
-            "to": [compact({"name": name(r.get("name")), "address": r.get("address")}) for r in m.to[:MAX_LISTED]],
-            "cc": [compact({"name": name(r.get("name")), "address": r.get("address")}) for r in m.cc[:MAX_LISTED]],
+            "from": await person(m.sender, m.sender_smtp),
+            "to": [await person(r) for r in m.to[:MAX_LISTED]],
+            "cc": [await person(r) for r in m.cc[:MAX_LISTED]],
             "to_truncated": len(m.to) > MAX_LISTED,
             "to_total": len(m.to) if len(m.to) > MAX_LISTED else None,
             "cc_truncated": len(m.cc) > MAX_LISTED,
@@ -191,7 +305,7 @@ async def get_message(
             "unread": m.unread,
             "draft": m.is_draft,
             "flag": m.flag.lower() if m.flag != "NotFlagged" else None,
-            "categories": m.categories,
+            "categories": [x for x in (_name(k) for k in m.categories) if x],
         }
         if include_body:
             text = html_to_text(m.html)
@@ -204,7 +318,7 @@ async def get_message(
         files = []
         listed = [a for a in m.attachments if not a.inline]
         for a in listed[:MAX_ATTACHMENTS]:
-            entry = {"name": name(a.name), "size": a.size, "type": a.content_type}
+            entry = {"name": _name(a.name), "size": a.size, "type": a.content_type}
             if a.kind == "file" and c.rt.links is not None:
                 entry.update(await c.rt.links.download(c.cred, c.person, a.id, a.name, a.size))
             elif a.kind != "file":
@@ -219,7 +333,10 @@ async def get_message(
             out["inline_images"] = inline
         if include_thread and m.conversation:
             others = [x for x in await em.conversation(c.ews, m.conversation, THREAD_MAX + 2) if x.id != m.id]
-            out["thread"] = [_listing(c, x, tz) for x in others[:THREAD_MAX]]
+            paths = {f.id: f.path for f in await resolve.folder_tree(c.ews)} if others else {}
+            out["thread"] = [
+                await _listing(addresses, x, tz, paths.get(x.folder), _preview(x.html)) for x in others[:THREAD_MAX]
+            ]
             if len(others) > THREAD_MAX:
                 out["thread_truncated"] = True
         return compact(out)
@@ -384,7 +501,8 @@ async def save_draft(
                 if prepared.errors:
                     raise invalid("The HTML was not saved: " + "; ".join(prepared.errors))
                 html_body = prepared.html
-                report = prepared.report()
+                # Always all three, so a clean letter says it is clean (rule 32).
+                report = {"sanitized": prepared.sanitized, "warnings": prepared.warnings, "size": prepared.size}
                 inline_images = prepared.inline_images
             else:
                 html_body = text_to_html(body)
@@ -460,13 +578,15 @@ async def save_draft(
         external = sorted({a for a in recipients if a.rsplit("@", 1)[-1].lower() != my_domain})
         preview_text = html_to_text(saved.html)
         attached = sum(1 for a in saved.attachments if not a.inline)
+        limit = tips.get("max_message_size")
         out: dict[str, Any] = {
             "id": did,
             "to": [r["address"] for r in saved.to],
             "cc": [r["address"] for r in saved.cc],
             "bcc": [r["address"] for r in saved.bcc] or None,
-            "subject": saved.subject,
-            "preview": preview_text[:500],
+            # A reply or forward carries the other side's subject and quoted text: marked as data.
+            "subject": content_line("the draft", saved.subject) if saved.subject else None,
+            "preview": content_block("the draft, with any quoted mail", preview_text[:500]) if preview_text else None,
             "preview_truncated": len(preview_text) > 500,
             "attachments": [a.name for a in saved.attachments if not a.inline][:MAX_ATTACHMENTS],
             "attachments_truncated": attached > MAX_ATTACHMENTS,
@@ -474,6 +594,8 @@ async def save_draft(
             "html": report or None,
             "external_recipients": external or None,
             "recipients_with_automatic_reply": tips.get("automatic_replies") or None,
+            "max_message_size": limit,
+            "over_size_limit": bool(limit and saved.size > limit),
             "invalid_recipients": tips.get("invalid") or None,
             "recipient_checks": CHECKS_FAILED if tips_failed else None,
             "next": "Show this to the person. Call send_draft with user_confirmed=true only after they agree.",
@@ -533,8 +655,8 @@ async def save_automatic_reply(
                 c.me,
                 state="Disabled",
                 audience=before["external_audience"].capitalize(),
-                internal=None,
-                external=None,
+                internal=before["internal"],  # the saved texts, sent back as they are: only the state changes
+                external=before["external"],
                 start=None,
                 end=None,
             )
@@ -548,6 +670,8 @@ async def save_automatic_reply(
             sd, ed = parse(start, c.tz, field="start"), parse(end, c.tz, field="end")
             if ed <= sd:
                 raise invalid("end must be after start. Nothing was changed.")
+            if ed <= datetime.now(UTC):  # Exchange refuses it without saying why (QA D15)
+                raise invalid("The end is already past: give a time to come. Nothing was changed.")
             s, e = ews_time(sd), ews_time(ed)
         receipt = c.guard(kind="auto_reply", user_confirmed=user_confirmed)
         await em.set_oof(
@@ -560,4 +684,12 @@ async def save_automatic_reply(
             start=s,
             end=e,
         )
-        return compact({"automatic_reply": state, "start": start, "end": end, **receipt})
+        return compact(
+            {
+                "automatic_reply": state,
+                # local, with the offset, like every other time this server returns (QA D16)
+                "start": local(s, c.tz) if s else None,
+                "end": local(e, c.tz) if e else None,
+                **receipt,
+            }
+        )

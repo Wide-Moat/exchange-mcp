@@ -8,7 +8,7 @@ from typing import Annotated, Any, Literal
 from pydantic import Field
 
 from exchange_mcp.core import resolve
-from exchange_mcp.core.content import content_block, name
+from exchange_mcp.core.content import content_block, content_line, name
 from exchange_mcp.core.context import call
 from exchange_mcp.core.errors import ExchangeError, invalid
 from exchange_mcp.core.guard import MAX_RECIPIENTS
@@ -64,8 +64,13 @@ def _row(ev: ec.Event, me: str, tz) -> dict[str, Any]:
             "start": local(ev.start, tz),
             "end": local(ev.end, tz),
             "all_day": ev.all_day,
-            "location": name(ev.location),
-            "organiser": None if ev.organised_by(me) else name(ev.organizer.get("name")) or ev.organizer.get("address"),
+            # Written by the organiser when it is someone else (QA D6): marked as their text, on one line.
+            "location": (ev.location if ev.organised_by(me) else content_line("the organiser (location)", ev.location))
+            if ev.location
+            else None,
+            "organiser": None
+            if ev.organised_by(me)
+            else content_line("the organiser (name)", ev.organizer.get("name") or ev.organizer.get("address") or ""),
             "my_response": RESPONSE.get(ev.my_response),
             "attendees": ev.invitee_count or None,
             "online_link": ev.online_url,

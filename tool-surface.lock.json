@@ -108,7 +108,7 @@
         "title": "Find mail"
       },
       "area": "mail",
-      "input_schema_sha256": "bc61ceee69ab6520eda4dd34239a64056cda269307d89f0d53e280b05e74d883"
+      "input_schema_sha256": "4f10c56379d3227806bed054b11dfda96535eba1aeddbb5a3ac49a71e7e43767"
     },
     "list_people": {
       "annotations": {
