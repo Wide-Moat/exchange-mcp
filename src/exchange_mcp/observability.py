@@ -7,6 +7,7 @@ counts the drop, so a regression shows as a counter instead of a leak.
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 
@@ -20,6 +21,16 @@ _SHAPES = re.compile(
 DROPPED = {"count": 0}
 
 
+class JsonFormatter(logging.Formatter):
+    """One JSON object per line, whatever the message holds: quotes and newlines cannot split a record."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        out = {"level": record.levelname, "logger": record.name, "msg": record.getMessage()}
+        if record.exc_info or record.exc_text:
+            out["exc"] = record.exc_text or self.formatException(record.exc_info)
+        return json.dumps(out, ensure_ascii=False)
+
+
 class ContentFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
         try:
@@ -27,6 +38,8 @@ class ContentFilter(logging.Filter):
         except Exception:  # noqa: BLE001 - a record that cannot format is not emitted
             DROPPED["count"] += 1
             return False
+        if record.exc_info and not record.exc_text:
+            record.exc_text = logging.Formatter().formatException(record.exc_info)
         if _SHAPES.search(message) or (record.exc_text and _SHAPES.search(record.exc_text)):
             DROPPED["count"] += 1
             return False
@@ -36,9 +49,7 @@ class ContentFilter(logging.Filter):
 def configure(level: int = logging.INFO) -> None:
     handler = logging.StreamHandler()
     handler.addFilter(ContentFilter())
-    handler.setFormatter(
-        logging.Formatter('{"level":"%(levelname)s","logger":"%(name)s","msg":"%(message)s"}', style="%")
-    )
+    handler.setFormatter(JsonFormatter())
     root = logging.getLogger()
     root.handlers[:] = [handler]
     root.setLevel(level)

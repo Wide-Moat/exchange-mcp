@@ -161,6 +161,10 @@ jobs:
     # metadata with a key file it generated the way a deployment would.
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
       - name: build
@@ -192,3 +196,6 @@ jobs:
       - name: server log
         if: always()
         run: docker logs mcp 2>&1 | tail -50 || true
+      - name: clean up
+        if: always()
+        run: docker rm -f mcp >/dev/null 2>&1 || true

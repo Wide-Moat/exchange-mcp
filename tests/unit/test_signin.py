@@ -30,7 +30,15 @@ RESOLVED = ok(
 @pytest.mark.parametrize("typed", ["alex", "CORP\\alex", "corp\\Alex", "alex@corp.example", " Alex@CORP.example "])
 def test_every_login_form_is_one_person(typed):
     assert normalise(typed, "upn", "corp.example") == "alex@corp.example"
-    assert normalise(typed, "down_level", "CORP") == "CORP\\alex"
+    assert normalise(typed, "down_level", "CORP", frozenset({"corp.example"})) == "CORP\\alex"
+
+
+@pytest.mark.parametrize("typed", ["alex@corp.unrelated.example", "alex@corp.example"])
+def test_down_level_takes_only_the_configured_upn_suffix(typed):
+    with pytest.raises(BadLogin):
+        normalise(typed, "down_level", "CORP")  # no LOGIN_ALSO: no @ form is accepted
+    with pytest.raises(BadLogin):
+        normalise("alex@corp.unrelated.example", "down_level", "CORP", frozenset({"corp.example"}))
 
 
 @pytest.mark.parametrize("typed", ["OTHER\\alex", "alex@other.example", "", "a b", "alex@", "\\alex", "x" * 300])

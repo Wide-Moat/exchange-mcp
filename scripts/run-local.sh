@@ -11,10 +11,11 @@
 set -euo pipefail
 : "${EXCHANGE_MCP_EWS_URL:?set the EWS URL}"
 : "${EXCHANGE_MCP_LOGIN_DOMAIN:?set the login domain}"
-export EXCHANGE_MCP_PUBLIC_URL="${EXCHANGE_MCP_PUBLIC_URL:-http://localhost:8765}"
+export PORT="${PORT:-8765}"
+export EXCHANGE_MCP_PUBLIC_URL="${EXCHANGE_MCP_PUBLIC_URL:-http://localhost:${PORT}}"
+export EXCHANGE_MCP_LISTEN=127.0.0.1  # plain http with a password form: this machine only
 export EXCHANGE_MCP_AUTH_MODE=password
 export EXCHANGE_MCP_KEY_PROVIDER=memory
-export PORT="${PORT:-8765}"
 cd "$(dirname "$0")/.."
 echo "MCP endpoint: ${EXCHANGE_MCP_PUBLIC_URL}/mcp"
 echo "Add it to a client, e.g.: claude mcp add --transport http exchange ${EXCHANGE_MCP_PUBLIC_URL}/mcp"

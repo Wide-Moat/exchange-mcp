@@ -8,7 +8,7 @@ A finding is fixed, or rejected with its reason written in the review. Nobody dr
 
 | # | Look for | Rule |
 |---|---|---|
-| B1 | HTTP or a SOAP string outside `ews/` (and AD FS calls outside `auth/adfs.py`) | 41 |
+| B1 | HTTP or a SOAP request built outside `ews/`. The other HTTP is named and nowhere else: AD FS in `auth/adfs.py`, the secrets manager in `keys/vault.py`, the client factory in `app.py`, the link routes' responses in `links/routes.py` | 41 |
 | B2 | An argument selecting a mailbox, user or server; `ExchangeImpersonation`; a `Mailbox` element for an address other than the person's own; a URL built from a person's input | 16 |
 | B3 | Key material read from `os.environ`; a key, password or token in a log call, an exception message, a URL or a result | 19, 20, 40 |
 | B4 | A credential, session or draft kept in a database, a file or a shared store | 19 |

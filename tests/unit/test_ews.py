@@ -211,3 +211,50 @@ async def test_ntlm_final_leg_closes_its_connection(ews, http):
     await Ews(http, EWS_URL, Ntlm("CORP\\alex", PASSWORD)).call(M.GetItem())
     sent = ews.last("GetItem")
     assert sent.headers["connection"] == "close" and sent.headers["authorization"].startswith("NTLM ")
+
+
+async def test_a_write_that_may_have_landed_is_never_reported_as_not_done():
+    """A dropped connection after sending, or an answer that is not EWS, leaves a write's outcome open."""
+
+    def dropped(req: httpx.Request) -> httpx.Response:
+        raise httpx.RemoteProtocolError("peer closed connection")
+
+    def proxy_page(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=b"<html><body>Gateway</body></html>")
+
+    for handler in (dropped, proxy_page):
+        http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        with pytest.raises(ExchangeError) as e:
+            await Ews(http, EWS_URL, Bearer("t")).call(M.SendItem())
+        assert e.value.key == "uncertain" and "may or may not" in e.value.text
+        with pytest.raises(ExchangeError) as e:
+            await Ews(http, EWS_URL, Bearer("t")).call(M.GetItem())
+        assert e.value.key == "busy"
+
+
+async def test_a_batch_partly_applied_is_reported_and_not_repeated(ews, http):
+    mixed = envelope(
+        "<m:MoveItemResponse><m:ResponseMessages>"
+        '<m:MoveItemResponseMessage ResponseClass="Success"><m:ResponseCode>NoError</m:ResponseCode></m:MoveItemResponseMessage>'
+        '<m:MoveItemResponseMessage ResponseClass="Error"><m:ResponseCode>ErrorServerBusy</m:ResponseCode></m:MoveItemResponseMessage>'
+        "</m:ResponseMessages></m:MoveItemResponse>"
+    )
+    ews.on("MoveItem", mixed)
+    with pytest.raises(ExchangeError) as e:
+        await Ews(http, EWS_URL, Bearer("t")).call(M.MoveItem())
+    assert e.value.key == "partial" and "1 of 2" in e.value.text
+    assert ews.ops() == ["MoveItem"]  # sent once, not replayed
+
+
+async def test_an_oversized_answer_is_not_read_into_memory(monkeypatch):
+    from exchange_mcp.ews import client as ec
+
+    monkeypatch.setattr(ec, "MAX_RESPONSE_BYTES", 1000)
+
+    def big(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=b"<" + b"x" * 5000)
+
+    http = httpx.AsyncClient(transport=httpx.MockTransport(big))
+    with pytest.raises(ExchangeError) as e:
+        await Ews(http, EWS_URL, Bearer("t")).call(M.GetAttachment())
+    assert e.value.key == "too_large"

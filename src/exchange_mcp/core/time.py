@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from exchange_mcp.core.errors import invalid
@@ -86,9 +86,19 @@ def parse(value: str, tz: ZoneInfo, *, field: str = "time") -> datetime:
     except ValueError:
         raise invalid(f"{field} is not a real date or time.") from None
     if off:
-        offset = "+00:00" if off == "Z" else off if ":" in off else off[:3] + ":" + off[3:]
-        return datetime.fromisoformat(dt.isoformat() + offset)
-    return dt.replace(tzinfo=tz)
+        if off == "Z":
+            return dt.replace(tzinfo=UTC)
+        sign, hh_o, mm_o = off[0], int(off[1:3]), int(off[-2:])
+        if hh_o > 14 or mm_o > 59:
+            raise invalid(f"{field} has an offset that does not exist; offsets run from -14:00 to +14:00.")
+        delta = timedelta(hours=hh_o, minutes=mm_o)
+        return dt.replace(tzinfo=timezone(delta if sign == "+" else -delta))
+    aware = dt.replace(tzinfo=tz)
+    if aware.astimezone(UTC).astimezone(tz).replace(tzinfo=None) != dt:
+        raise invalid(f"{field} does not exist in {tz.key}: the clocks skip it. Give an offset or another time.")
+    if dt.replace(tzinfo=tz, fold=1).utcoffset() != aware.utcoffset():
+        raise invalid(f"{field} happens twice in {tz.key} (the clocks go back). Give it with an offset.")
+    return aware
 
 
 def ews(dt: datetime) -> str:

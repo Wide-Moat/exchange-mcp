@@ -26,6 +26,10 @@ MESSAGES: dict[str, str] = {
         "Exchange failed while handling this, so it may or may not have happened. Check before trying again. "
         "Reference {ref}."
     ),
+    "partial": (
+        "Exchange applied {done} of {total} and refused the rest, so part of this happened. List the items "
+        "again to see where they are before trying again. Reference {ref}."
+    ),
     "ambiguous": 'More than one {kind} matches "{query}". Ask which one is meant: {candidates}.',
     "unresolved": 'No {kind} matches "{query}". {where}',
     "confirm": (

@@ -21,10 +21,24 @@ from exchange_mcp.ews.common import WELL_KNOWN
 from exchange_mcp.registry import tool
 
 MAX_IDS = 25
+MAX_ATTACHMENTS = 25
+MAX_CATEGORIES = 25
+UNDO_DELETE = "list_messages folder=deleted, then update_messages action=move"
+CHECKS_FAILED = "Exchange did not answer the recipient checks; the draft is saved."
 BODY_CHARS = 20_000
 THREAD_MAX = 10
 _FILE_NAME = re.compile(r"^[^/\\\x00-\x1f]{1,200}$")
 ID = Annotated[str, Field(description="The id exactly as a mail tool returned it.", min_length=1, max_length=512)]
+
+
+def _received(m: em.Listing):
+    from datetime import UTC, datetime
+
+    try:
+        dt = datetime.fromisoformat(m.received.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return dt if dt.tzinfo else dt.replace(tzinfo=UTC)
 
 
 def _listing(c, m: em.Listing, tz) -> dict[str, Any]:
@@ -89,9 +103,10 @@ async def list_messages(
             nxt = await c.cursor_out({"o": start + n} if start + n < len(tree) else None, scope)
             return page_result(rows, nxt, **extra)
 
-        where = "archive" if archive else (folder or "inbox")
+        where = folder or ("archive" if archive else "inbox")
         scope = {
             "f": where,
+            "r": archive,
             "q": query or "",
             "u": unread_only,
             "s": sender or "",
@@ -100,7 +115,9 @@ async def list_messages(
             "h": has_attachments,
         }
         start = (await c.cursor_in(cursor, scope) or {}).get("o", 0)
-        fid = await resolve.folder(c.ews, where)
+        fid = await resolve.folder(c.ews, where, archive=archive)
+        since_dt = parse(since, tz, field="since") if since else None
+        until_dt = parse(until, tz, field="until") if until else None
         s = ews_time(parse(since, tz, field="since")) if since else None
         u = ews_time(parse(until, tz, field="until")) if until else None
         aqs = None
@@ -126,8 +143,16 @@ async def list_messages(
             until=u,
             has_attachments=has_attachments,
         )
-        if aqs and unread_only:
-            found = [m for m in found if m.unread]
+        if aqs:
+            # AQS compares whole days; the bounds the person gave are exact, so the page is filtered to them
+            # (it may come back shorter; the cursor goes on).
+            found = [
+                m
+                for m in found
+                if (not unread_only or m.unread)
+                and (since_dt is None or _received(m) is None or _received(m) >= since_dt)
+                and (until_dt is None or _received(m) is None or _received(m) < until_dt)
+            ]
         rows = [_listing(c, m, tz) for m in found]
         nxt = await c.cursor_out({"o": page.next_offset} if page.next_offset is not None else None, scope)
         return page_result(rows, nxt, total=page.total, **extra)
@@ -167,9 +192,8 @@ async def get_message(
             else:
                 out["body"] = content_block("the sender", text)
         files = []
-        for a in m.attachments:
-            if a.inline:
-                continue
+        listed = [a for a in m.attachments if not a.inline]
+        for a in listed[:MAX_ATTACHMENTS]:
             entry = {"name": name(a.name), "size": a.size, "type": a.content_type}
             if a.kind == "file" and c.rt.links is not None:
                 entry.update(await c.rt.links.download(c.cred, c.person, a.id, a.name, a.size))
@@ -177,12 +201,17 @@ async def get_message(
                 entry["note"] = "An attached message: open it in Outlook."
             files.append(entry)
         out["attachments"] = files
+        if len(listed) > MAX_ATTACHMENTS:
+            out["attachments_truncated"] = True
+            out["attachments_total"] = len(listed)
         inline = sum(1 for a in m.attachments if a.inline)
         if inline:
             out["inline_images"] = inline
         if include_thread and m.conversation:
-            others = [x for x in await em.conversation(c.ews, m.conversation, THREAD_MAX + 1) if x.id != m.id]
+            others = [x for x in await em.conversation(c.ews, m.conversation, THREAD_MAX + 2) if x.id != m.id]
             out["thread"] = [_listing(c, x, tz) for x in others[:THREAD_MAX]]
+            if len(others) > THREAD_MAX:
+                out["thread_truncated"] = True
         return compact(out)
 
 
@@ -263,13 +292,13 @@ async def update_messages(
             if not folder:
                 raise invalid("move needs folder. Nothing was moved.")
             fid = await resolve.folder(c.ews, folder)
-            await em.move(c.ews, ids, fid)
-            return {"moved": len(ids), "to": folder}
+            new_ids = await em.move(c.ews, ids, fid)
+            return {"moved": len(ids), "to": folder, "ids": new_ids}
         if action == "delete":
             from exchange_mcp.ews.common import move_to_deleted
 
             await move_to_deleted(c.ews, ids)
-            return {"deleted": len(ids), "where": "Deleted Items", "undo": "update_messages action=move"}
+            return {"deleted": len(ids), "where": "Deleted Items", "undo": UNDO_DELETE}
         if action in ("mark_read", "mark_unread"):
             await em.set_fields(c.ews, ids, [em.set_read(action == "mark_read")])
         elif action in ("flag", "unflag", "complete"):
@@ -278,7 +307,9 @@ async def update_messages(
         else:
             if not categories:
                 raise invalid(f"{action} needs categories.")
-            cats = [x.strip() for x in categories if x.strip()][:25]
+            cats = [x.strip() for x in categories if x.strip()]
+            if len(cats) > MAX_CATEGORIES:
+                raise ExchangeError("too_many", limit=MAX_CATEGORIES, what="categories", count=len(cats))
             current = await em.categories_of(c.ews, ids)
             for i in ids:
                 have = current.get(i, [])
@@ -403,21 +434,24 @@ async def save_draft(
                 content_id=img.content_id,
             )
         saved = await em.get_message(c.ews, did, body=True)
-        recipients = [r["address"] for r in saved.to + saved.cc if r.get("address")]
+        recipients = [r["address"] for r in saved.to + saved.cc + saved.bcc if r.get("address")]
+        if len(recipients) > MAX_RECIPIENTS:
+            raise ExchangeError("too_many", limit=MAX_RECIPIENTS, what="recipients", count=len(recipients))
         tips: dict[str, Any] = {}
+        tips_failed = False
         if recipients:
             try:
-                tips = await em.mail_tips(c.ews, c.me, recipients + bcc_l)
+                tips = await em.mail_tips(c.ews, c.me, recipients)
             except ExchangeError:
-                tips = {}
+                tips_failed = True  # the draft is saved; the warnings could not be fetched
         my_domain = c.me.rsplit("@", 1)[-1].lower()
-        external = sorted({a for a in recipients + bcc_l if a.rsplit("@", 1)[-1].lower() != my_domain})
+        external = sorted({a for a in recipients if a.rsplit("@", 1)[-1].lower() != my_domain})
         preview_text = html_to_text(saved.html)
         out: dict[str, Any] = {
             "id": did,
             "to": [r["address"] for r in saved.to],
             "cc": [r["address"] for r in saved.cc],
-            "bcc": bcc_l or None,
+            "bcc": [r["address"] for r in saved.bcc] or None,
             "subject": saved.subject,
             "preview": preview_text[:500] + ("…" if len(preview_text) > 500 else ""),
             "attachments": [a.name for a in saved.attachments if not a.inline],
@@ -425,6 +459,7 @@ async def save_draft(
             "external_recipients": external or None,
             "recipients_with_automatic_reply": tips.get("automatic_replies") or None,
             "invalid_recipients": tips.get("invalid") or None,
+            "recipient_checks": CHECKS_FAILED if tips_failed else None,
             "next": "Show this to the person. Call send_draft with user_confirmed=true only after they agree.",
         }
         if c.rt.links is not None:
@@ -450,7 +485,7 @@ async def send_draft(
         d = await em.get_message(c.ews, id, body=False)
         if not d.ours or not d.is_draft:
             raise ExchangeError("not_own_draft")
-        count = len(d.to) + len(d.cc)
+        count = len(d.to) + len(d.cc) + len(d.bcc)
         receipt = c.guard(kind="mail", user_confirmed=user_confirmed, recipients=count)
         await em.send(c.ews, d.id, d.change_key)
         return {"sent": True, "to": [r.get("address") for r in d.to], "cc": [r.get("address") for r in d.cc], **receipt}
@@ -482,8 +517,8 @@ async def save_automatic_reply(
                 c.me,
                 state="Disabled",
                 audience=before["external_audience"].capitalize(),
-                internal="",
-                external="",
+                internal=None,
+                external=None,
                 start=None,
                 end=None,
             )

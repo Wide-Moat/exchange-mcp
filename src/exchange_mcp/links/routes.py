@@ -21,6 +21,7 @@ from exchange_mcp.links.links import MAX_ATTACHMENT_BYTES, MAX_BODY_BYTES, safe_
 
 log = logging.getLogger("exchange_mcp.links")
 _UPLOADS = asyncio.Semaphore(3)  # at most this many uploads held in memory at once, across all people
+UPLOAD_SECONDS = 120
 
 
 def _deny() -> Response:
@@ -45,6 +46,8 @@ async def download(request: Request) -> Response:
     cred = _cred(link) if link else None
     if link is None or cred is None:
         return _deny()
+    if isinstance(link.get("s"), int) and link["s"] > MAX_ATTACHMENT_BYTES:
+        return JSONResponse({"error": "The attachment is larger than this connector passes through."}, 413)
     try:
         name, ctype, data = await em.attachment_bytes(_ews(cred), link["a"])
     except ExchangeError as e:
@@ -80,10 +83,14 @@ async def upload(request: Request) -> Response:
             return JSONResponse({"error": "The server is receiving other files. Try again in a minute."}, 503)
         async with _UPLOADS:
             data = bytearray()
-            async for chunk in request.stream():
-                data.extend(chunk)
-                if len(data) > limit:
-                    return JSONResponse({"error": f"The file is larger than {limit // 2**20} MB."}, 413)
+            try:
+                async with asyncio.timeout(UPLOAD_SECONDS):  # a stalled client cannot hold a slot
+                    async for chunk in request.stream():
+                        data.extend(chunk)
+                        if len(data) > limit:
+                            return JSONResponse({"error": f"The file is larger than {limit // 2**20} MB."}, 413)
+            except TimeoutError:
+                return JSONResponse({"error": "The upload took too long. Nothing was saved; try again."}, 408)
             if not data:
                 return JSONResponse({"error": "The upload was empty."}, 400)
             return await _store(link, cred, bytes(data))
@@ -128,4 +135,10 @@ async def _store(link: dict, cred: Credential, data: bytes) -> Response:
         return JSONResponse({"body": "saved", **prepared.report()})
     except ExchangeError as e:
         log.info("upload refused: %s", e.key)
-        return JSONResponse({"error": "Exchange did not accept it. Nothing was changed; try again."}, 502)
+        return JSONResponse(
+            {
+                "error": "Exchange did not accept all of it. Part may be saved: show the draft with save_draft "
+                "before trying again."
+            },
+            502,
+        )

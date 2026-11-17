@@ -27,7 +27,11 @@ class Transit:
         self._token_file = token_file
 
     def _headers(self) -> dict[str, str]:
-        token = self._token_file.read_text().strip()
+        with self._token_file.open("rb") as f:
+            raw = f.read(16 * 1024 + 1)
+        if len(raw) > 16 * 1024:
+            raise TransitError("the secrets manager token file is larger than any token")
+        token = raw.decode("ascii", "replace").strip()
         if not token:
             raise TransitError("the secrets manager token file is empty")
         return {"X-Vault-Token": token}

@@ -13,7 +13,6 @@ import httpx
 from exchange_mcp.auth.credential import Credential
 from exchange_mcp.core.errors import ExchangeError
 from exchange_mcp.ews.client import Ews
-from exchange_mcp.ews.soap import M, T, find, findall, text
 
 
 class SignInFailed(Exception):
@@ -25,37 +24,20 @@ def name_part(login: str) -> str:
 
 
 async def check(http: httpx.AsyncClient, ews_url: str, login: str, password: str) -> Credential:
+    from exchange_mcp.core.resolve import candidates
+
     probe = Credential("password", login, "", "", password=password)
     ews = Ews(http, ews_url, probe.auth())
     me = name_part(login)
     try:
-        messages = await ews.call(
-            M.ResolveNames(
-                M.UnresolvedEntry(me),
-                ReturnFullContactData="true",
-                SearchScope="ActiveDirectory",
-                ContactDataShape="Default",
-            )
-        )
+        found = await candidates(ews, me, scope="ActiveDirectory")
     except ExchangeError as e:
         if e.key == "reconnect":
             raise SignInFailed from None
-        if e.key in ("failed",) and e.params.get("code") == "ErrorNameResolutionNoResults":
-            raise SignInFailed from None
         raise
-    candidates = []
-    for m in messages:
-        for res in findall(m, "m:ResolutionSet/t:Resolution"):
-            address = text(res, "t:Mailbox/t:EmailAddress")
-            alias = text(res, "t:Contact/t:Alias")
-            name = text(res, "t:Mailbox/t:Name") or text(res, "t:Contact/t:DisplayName")
-            if address:
-                candidates.append((address, alias, name))
-    login_l = login.lower()
+    login_l, me_l = login.lower(), me.lower()
     mine = [
-        c
-        for c in candidates
-        if c[1].lower() == me.lower() or c[0].lower() == login_l or c[0].split("@")[0].lower() == me.lower()
+        p for p in found if me_l in (p.alias.lower(), p.address.split("@")[0].lower()) or p.address.lower() == login_l
     ]
     if len(mine) != 1:
         # Authenticated, but the directory does not say which mailbox is this login's. Refuse rather than
@@ -65,8 +47,4 @@ async def check(http: httpx.AsyncClient, ews_url: str, login: str, password: str
             reason="Signed in, but Exchange did not identify your mailbox by your login. Ask the operator to check "
             "the login format setting.",
         )
-    address, _, name = mine[0]
-    return Credential("password", login, address, name or address, password=password)
-
-
-__all__ = ["SignInFailed", "check", "find", "name_part", "T"]
+    return Credential("password", login, mine[0].address, mine[0].name or mine[0].address, password=password)

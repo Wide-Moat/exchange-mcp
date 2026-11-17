@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from exchange_mcp.core.context import call
-from exchange_mcp.ews.soap import M, T, text
+from exchange_mcp.ews.mail import oof
 from exchange_mcp.registry import AREAS, tool
 
 MODE_SENTENCE = {
@@ -26,8 +26,7 @@ async def get_connection() -> dict[str, Any]:
         on = sorted(c.rt.settings.areas)
         oof_state = "unknown"
         if "mail" in c.rt.settings.areas:
-            messages = await c.ews.call(M.GetUserOofSettingsRequest(T.Mailbox(T.Address(c.me))))
-            oof_state = text(messages[0] if messages else None, ".//t:OofState", "unknown")
+            oof_state = (await oof(c.ews, c.me))["state"]
         return {
             "name": c.cred.name,
             "address": c.cred.address,

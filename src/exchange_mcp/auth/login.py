@@ -19,19 +19,22 @@ class BadLogin(ValueError):
     """Not a login of this organisation. The message is generic on purpose."""
 
 
-def normalise(typed: str, fmt: LoginFormat, domain: str) -> str:
+def normalise(typed: str, fmt: LoginFormat, domain: str, also: frozenset[str] = frozenset()) -> str:
+    """`also` names the organisation's other spelling, exactly: the UPN suffix in down_level mode, the
+    NetBIOS name in upn mode (the first label of the UPN suffix is accepted there as well)."""
     typed = typed.strip()
     if not typed or len(typed) > MAX_LOGIN:
         raise BadLogin
     domain_l = domain.lower()
-    netbios = domain_l.split(".")[0]
     if "\\" in typed:
         given, _, name = typed.partition("\\")
-        if given.lower() not in (domain_l, netbios):
+        accepted = {domain_l} if fmt == "down_level" else {domain_l.split(".")[0], *also}
+        if given.lower() not in accepted:
             raise BadLogin
     elif "@" in typed:
         name, _, given = typed.rpartition("@")
-        if given.lower() != domain_l and not (fmt == "down_level" and given.lower().split(".")[0] == domain_l):
+        accepted = {domain_l} if fmt == "upn" else set(also)
+        if given.lower() not in accepted:
             raise BadLogin
     else:
         name = typed

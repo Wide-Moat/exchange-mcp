@@ -12,7 +12,6 @@ from exchange_mcp.core.content import name as clean_name
 from exchange_mcp.core.errors import ExchangeError, invalid
 from exchange_mcp.ews.client import Ews
 from exchange_mcp.ews.common import WELL_KNOWN
-from exchange_mcp.ews.soap import M, T, findall, text
 
 ADDRESS = re.compile(r"^[^@\s<>\"]+@[^@\s<>\"]+\.[^@\s<>\"]+$")
 GROUPS = frozenset({"PublicDL", "PrivateDL", "GroupMailbox"})
@@ -27,34 +26,29 @@ class Person:
     title: str = ""
     department: str = ""
     phone: str = ""
+    alias: str = ""
 
     def short(self) -> str:
         return f"{self.name} <{self.address}>" if self.name else self.address
 
 
 async def candidates(ews: Ews, query: str, *, scope: str = "ActiveDirectoryContacts") -> list[Person]:
-    try:
-        messages = await ews.call(
-            M.ResolveNames(M.UnresolvedEntry(query), ReturnFullContactData="true", SearchScope=scope)
+    from exchange_mcp.ews import people as ep
+
+    found = await ep.resolve_names(ews, query, directory_only=scope == "ActiveDirectory")
+    return [
+        Person(
+            name=clean_name(f.name) or "",
+            address=f.address,
+            kind=f.kind,
+            title=clean_name(f.title) or "",
+            department=clean_name(f.department) or "",
+            phone=f.phone,
+            alias=f.alias,
         )
-    except ExchangeError as e:
-        if e.key == "failed" and e.params.get("code") == "ErrorNameResolutionNoResults":
-            return []
-        raise
-    out = []
-    for m in messages:
-        for r in findall(m, "m:ResolutionSet/t:Resolution"):
-            out.append(
-                Person(
-                    name=clean_name(text(r, "t:Mailbox/t:Name") or text(r, "t:Contact/t:DisplayName")) or "",
-                    address=text(r, "t:Mailbox/t:EmailAddress"),
-                    kind=text(r, "t:Mailbox/t:MailboxType", "Mailbox"),
-                    title=clean_name(text(r, "t:Contact/t:JobTitle")) or "",
-                    department=clean_name(text(r, "t:Contact/t:Department")) or "",
-                    phone=text(r, "t:Contact/t:PhoneNumbers/t:Entry[@Key='BusinessPhone']"),
-                )
-            )
-    return [p for p in out if p.address]
+        for f in found
+        if f.address
+    ]
 
 
 async def recipient(ews: Ews, query: str) -> Person:
@@ -117,58 +111,32 @@ class Folder:
 
 
 async def folder_tree(ews: Ews, root: str = "msgfolderroot") -> list[Folder]:
-    messages = await ews.call(
-        M.FindFolder(
-            M.FolderShape(
-                T.BaseShape("IdOnly"),
-                T.AdditionalProperties(
-                    T.FieldURI(FieldURI="folder:DisplayName"),
-                    T.FieldURI(FieldURI="folder:ParentFolderId"),
-                    T.FieldURI(FieldURI="folder:UnreadCount"),
-                    T.FieldURI(FieldURI="folder:TotalCount"),
-                    T.FieldURI(FieldURI="folder:ChildFolderCount"),
-                    T.FieldURI(FieldURI="folder:FolderClass"),
-                ),
-            ),
-            M.IndexedPageFolderView(MaxEntriesReturned="1000", Offset="0", BasePoint="Beginning"),
-            M.ParentFolderIds(T.DistinguishedFolderId(Id=root)),
-            Traversal="Deep",
-        )
-    )
-    raw = []
-    for f in findall(messages[0], "m:RootFolder/t:Folders/*"):
-        cls = text(f, "t:FolderClass")
-        if cls and not cls.startswith("IPF.Note"):
-            continue  # mail folders only: calendars, contacts and tasks have their own tools
-        raw.append(
-            (
-                f.find("{*}FolderId").get("Id"),
-                (f.find("{*}ParentFolderId").get("Id") if f.find("{*}ParentFolderId") is not None else ""),
-                clean_name(text(f, "t:DisplayName")) or "",
-                int(text(f, "t:UnreadCount", "0") or 0),
-                int(text(f, "t:TotalCount", "0") or 0),
-                int(text(f, "t:ChildFolderCount", "0") or 0),
-            )
-        )
-    by_id = {r[0]: r for r in raw}
+    from exchange_mcp.ews.mail import folder_tree as raw_tree
+
+    raw = [r for r in await raw_tree(ews, root) if r.mail]  # calendars, contacts, tasks have their own tools
+    by_id = {r.id: r for r in raw}
 
     def path(fid: str, depth: int = 0) -> str:
         r = by_id.get(fid)
         if r is None or depth > 32:
             return ""
-        parent = path(r[1], depth + 1)
-        return f"{parent}/{r[2]}" if parent else r[2]
+        parent = path(r.parent, depth + 1)
+        name = clean_name(r.name) or ""
+        return f"{parent}/{name}" if parent else name
 
-    return [Folder(r[0], r[2], path(r[0]), r[3], r[4], r[5]) for r in raw]
+    return [Folder(r.id, clean_name(r.name) or "", path(r.id), r.unread, r.total, r.children) for r in raw]
 
 
-async def folder(ews: Ews, value: str) -> str:
-    """A folder id for a well-known name, a display name or a path like Inbox/Projects."""
+async def folder(ews: Ews, value: str, *, archive: bool = False) -> str:
+    """A folder id for a well-known name, a display name or a path like Inbox/Projects; with `archive`,
+    looked up in the online archive."""
     v = value.strip()
     key = v.lower()
-    if key in WELL_KNOWN:
+    if archive and key in ("archive", ""):
+        return "archivemsgfolderroot"
+    if key in WELL_KNOWN and not archive:
         return WELL_KNOWN[key]
-    tree = await folder_tree(ews)
+    tree = await folder_tree(ews, "archivemsgfolderroot" if archive else "msgfolderroot")
     matches = [f for f in tree if f.path.lower() == key] or [f for f in tree if f.name.lower() == key]
     if not matches:
         raise ExchangeError("unresolved", kind="folder", query=v)

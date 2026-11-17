@@ -59,6 +59,7 @@ POST /mcp  Authorization: Bearer <sealed access token>
 | `EXCHANGE_MCP_AUTH_MODE` | `adfs` or `password` |
 | `EXCHANGE_MCP_LOGIN_FORMAT` | `password` mode: how a login is sent to Exchange, `upn` (`name@domain`) or `down_level` (`DOMAIN\name`) |
 | `EXCHANGE_MCP_LOGIN_DOMAIN` | `password` mode: the domain added when a person types a bare `name` (the NetBIOS name for `down_level`, the UPN suffix for `upn`) |
+| `EXCHANGE_MCP_LOGIN_ALSO` | `password` mode: the other spelling accepted exactly (the UPN suffix for `down_level`, the NetBIOS name for `upn`) |
 | `EXCHANGE_MCP_ADFS_*` | issuer, client id, signing key file, EWS resource (`adfs` mode) |
 | `EXCHANGE_MCP_KEY_PROVIDER` | `vault`, `file` or `memory` ([auth-modes](auth-modes.md#the-sealing-key)) |
 | `EXCHANGE_MCP_BASE_URL` | this server's public address; issuer of its tokens |

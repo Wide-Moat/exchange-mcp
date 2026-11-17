@@ -43,7 +43,8 @@ def _https(name: str, value: str, *, bare: bool = False) -> str:
 
 def _public_url(value: str) -> str:
     u = urlsplit(value)
-    if u.scheme == "http" and u.hostname in ("localhost", "127.0.0.1") and not u.username and u.path in ("", "/"):
+    local = u.scheme == "http" and u.hostname in ("localhost", "127.0.0.1") and not u.username
+    if local and u.path in ("", "/") and not u.query and not u.fragment:
         return value.rstrip("/")  # local development only
     return _https(f"{PREFIX}PUBLIC_URL", value, bare=True)
 
@@ -110,6 +111,7 @@ class Settings:
     ca_bundle: Path | None = None
     login_format: LoginFormat = "upn"
     login_domain: str = ""
+    login_also: frozenset[str] = frozenset()
     key_file: Path | None = None
     vault: Vault | None = None
     adfs: Adfs | None = None
@@ -137,6 +139,7 @@ class Settings:
             raise ConfigError(f"{PREFIX}LOGIN_DOMAIN is required in password mode")
         if login_format == "down_level" and ("." in login_domain or "\\" in login_domain):
             raise ConfigError(f"{PREFIX}LOGIN_DOMAIN is the NetBIOS domain name for down_level logins")
+        login_also = frozenset(a.strip().lower() for a in get("LOGIN_ALSO").split(",") if a.strip())
         if login_format == "upn" and login_domain and ("." not in login_domain or "@" in login_domain):
             raise ConfigError(f"{PREFIX}LOGIN_DOMAIN is the UPN suffix (example: corp.example) for upn logins")
 
@@ -184,6 +187,7 @@ class Settings:
             ca_bundle=_file(f"{PREFIX}CA_BUNDLE", get("CA_BUNDLE"), required=False),
             login_format=login_format,  # type: ignore[arg-type]
             login_domain=login_domain,
+            login_also=login_also,
             key_file=_file(f"{PREFIX}KEY_FILE", get("KEY_FILE"), required=provider == "file"),
             vault=vault,
             adfs=adfs,

@@ -123,7 +123,7 @@ MUTATIONS = [
     (
         "errors inside HTTP 200",
         "ews/client.py",
-        [('if m.get("ResponseClass") == "Error":', "if False:")],
+        [('errors = [m for m in checked if m.get("ResponseClass") == "Error"]', "errors = []")],
         "tests/unit/test_ews.py",
     ),
     (
@@ -188,7 +188,16 @@ MUTATIONS = [
     (
         "logins of another domain are refused",
         "auth/login.py",
-        [("if given.lower() not in (domain_l, netbios):", "if False:")],
+        [
+            (
+                "        if given.lower() not in accepted:\n            raise BadLogin\n    elif",
+                "        if False:\n            raise BadLogin\n    elif",
+            ),
+            (
+                "        if given.lower() not in accepted:\n            raise BadLogin\n    else",
+                "        if False:\n            raise BadLogin\n    else",
+            ),
+        ],
         "tests/unit/test_signin.py",
     ),
     (
@@ -226,6 +235,170 @@ MUTATIONS = [
         "auth/adfs.py",
         [("if previous is not None and previous.login != login:", "if False:")],
         "tests/unit/test_adfs.py",
+    ),
+    (
+        "only the organiser changes a meeting",
+        "tools/calendar.py",
+        [("            if not existing.organised_by(c.me):\n", "            if False:\n")],
+        "tests/unit/test_calendar.py",
+    ),
+    (
+        "only the organiser cancels",
+        "tools/calendar.py",
+        [
+            (
+                '        if not ev.organised_by(c.me):\n            raise ExchangeError("not_organiser")',
+                '        if False:\n            raise ExchangeError("not_organiser")',
+            )
+        ],
+        "tests/unit/test_calendar.py",
+    ),
+    (
+        "invitations need the person's word",
+        "tools/calendar.py",
+        [
+            ('            c.rt.guard.confirmed(kind="invite", user_confirmed=user_confirmed)\n', ""),
+            (
+                'receipt = c.guard(kind="invite", user_confirmed=user_confirmed, recipients=told)',
+                'receipt = c.guard(kind="invite", user_confirmed=True, recipients=told)',
+            ),
+        ],
+        "tests/unit/test_calendar.py",
+    ),
+    (
+        "cancelling needs the person's word",
+        "tools/calendar.py",
+        [
+            (
+                'receipt = c.guard(kind="cancel", user_confirmed=user_confirmed, recipients=told)',
+                'receipt = c.guard(kind="cancel", user_confirmed=True, recipients=told)',
+            )
+        ],
+        "tests/unit/test_calendar.py",
+    ),
+    (
+        "answering an invitation draws from the bucket",
+        "tools/calendar.py",
+        [('receipt = c.rt.guard.spend(c.person, kind="invite") if send_response else {}', "receipt = {}")],
+        "tests/unit/test_calendar.py",
+    ),
+    (
+        "the organiser does not answer their own meeting",
+        "tools/calendar.py",
+        [("        if ev.organised_by(c.me):\n", "        if False:\n")],
+        "tests/unit/test_calendar.py",
+    ),
+    (
+        "at most 20 attendees and rooms",
+        "tools/calendar.py",
+        [("if given > MAX_RECIPIENTS:", "if False:")],
+        "tests/unit/test_calendar.py",
+    ),
+    (
+        "a repeat must end",
+        "tools/calendar.py",
+        [("if repeat and not (repeat_until or repeat_count):", "if False:")],
+        "tests/unit/test_calendar.py",
+    ),
+    (
+        "only meeting responses leave from the calendar sender",
+        "ews/calendar.py",
+        [("if etree.QName(response).localname not in MEETING_RESPONSES:", "if False:")],
+        "tests/unit/test_calendar.py",
+    ),
+    (
+        "a contact id must be a contact",
+        "ews/people.py",
+        [('if etree.QName(found[0]).localname != "Contact":', "if False:")],
+        "tests/unit/test_contacts.py",
+    ),
+    (
+        "contacts have three address and four phone slots",
+        "tools/contacts.py",
+        [("if len(emails or []) > len(ep.EMAIL_KEYS) or len(phones or []) > len(ep.PHONE_KEYS):", "if False:")],
+        "tests/unit/test_contacts.py",
+    ),
+    (
+        "NTLM: the authenticated request closes its connection",
+        "ews/transport.py",
+        [('        request.headers["Connection"] = "close"\n', "")],
+        "tests/unit/test_ews.py",
+    ),
+    (
+        "NTLM: an unchallenged probe is refused",
+        "ews/transport.py",
+        [
+            (
+                "        if response.status_code != 401:\n            raise ExchangeError",
+                "        if False:\n            raise ExchangeError",
+            )
+        ],
+        "tests/unit/test_ews.py",
+    ),
+    (
+        "the limiter does not grow without bound",
+        "auth/limiter.py",
+        [("                raise Limited  # a flood", "                pass  # a flood")],
+        "tests/unit/test_review_fixes.py",
+    ),
+    (
+        "the bucket table does not grow without bound",
+        "core/guard.py",
+        [('                raise ExchangeError("busy", seconds=60)', "                pass")],
+        "tests/unit/test_review_fixes.py",
+    ),
+    (
+        "an exception is checked before it is logged",
+        "observability.py",
+        [("            record.exc_text = logging.Formatter().formatException(record.exc_info)", "            pass")],
+        "tests/unit/test_review_fixes.py",
+    ),
+    (
+        "blind copies count against the cap",
+        "tools/mail.py",
+        [("count = len(d.to) + len(d.cc) + len(d.bcc)", "count = len(d.to) + len(d.cc)")],
+        "tests/unit/test_review_fixes.py",
+    ),
+    (
+        "turning the automatic reply off keeps its texts",
+        "tools/mail.py",
+        [
+            (
+                "                internal=None,\n                external=None,",
+                '                internal="",\n                external="",',
+            )
+        ],
+        "tests/unit/test_review_fixes.py",
+    ),
+    (
+        "categories are not cut silently",
+        "tools/mail.py",
+        [("            if len(cats) > MAX_CATEGORIES:", "            if False:")],
+        "tests/unit/test_review_fixes.py",
+    ),
+    (
+        "a live code is never forgotten",
+        "oauth/provider.py",
+        [
+            (
+                '            raise TokenError(error="invalid_request", '
+                'error_description="too many sign-ins at once; try again")',
+                "            self._used_codes.clear()",
+            )
+        ],
+        "tests/unit/test_review_fixes.py",
+    ),
+    (
+        "an ended AD FS sign-in gets no token",
+        "oauth/provider.py",
+        [("            if left <= 0:", "            if False:")],
+        "tests/unit/test_review_fixes.py",
+    ),
+    (
+        "key ids are unique in a key file",
+        "keys/providers.py",
+        [("        if any(kid == k for k, _ in keys):", "        if False:")],
+        "tests/unit/test_review_fixes.py",
     ),
 ]
 

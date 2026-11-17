@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import os
 import ssl
 from urllib.parse import urlsplit
 
@@ -57,7 +58,8 @@ def build(
         issuer_url=settings.public_url,
         resource_server_url=f"{settings.public_url}/mcp",
         client_registration_options=ClientRegistrationOptions(enabled=True),
-        revocation_options=RevocationOptions(enabled=True),
+        # Off: this server stores nothing, so a revoked token would go on working (docs/auth-modes.md).
+        revocation_options=RevocationOptions(enabled=False),
         validate_token_resource=False,
     )
     server = ExchangeServer(settings.areas, auth=auth, auth_server_provider=provider)
@@ -109,7 +111,8 @@ def main() -> None:
     log.info("starting mode=%s keys=%s", settings.auth_mode, settings.key_provider)
     uvicorn.run(
         app,
-        host="0.0.0.0",  # noqa: S104 - a container listens on all interfaces
+        # A container listens on all interfaces; a laptop run binds loopback (scripts/run-local.sh).
+        host=os.environ.get("EXCHANGE_MCP_LISTEN", "0.0.0.0"),  # noqa: S104
         port=settings.port,
         log_level="warning",
         access_log=False,  # access logs carry query strings

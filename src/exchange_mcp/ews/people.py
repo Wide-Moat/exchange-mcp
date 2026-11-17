@@ -33,6 +33,8 @@ class Found:
     company: str = ""
     phone: str = ""
     room_list: str = ""
+    kind: str = "Mailbox"  # the EWS MailboxType
+    alias: str = ""
 
 
 def _ok(response: etree._Element) -> None:
@@ -85,6 +87,8 @@ async def resolve_names(ews: Ews, query: str, *, directory_only: bool) -> list[F
                 department=text(contact, "t:Department"),
                 company=text(contact, "t:CompanyName"),
                 phone=_phone(contact),
+                kind=kind,
+                alias=text(contact, "t:Alias"),
             )
             if found.address or found.id:
                 out.append(found)

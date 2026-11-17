@@ -63,6 +63,8 @@ ALLOWED = READS | WRITES
 
 BUSY_RETRIES = 2
 BUSY_MAX_WAIT = 5.0
+# An attachment travels base64 inside the SOAP answer: 25 MB of file is about 34 MB of answer.
+MAX_RESPONSE_BYTES = 40 * 1024 * 1024
 
 
 def _children(el):
@@ -116,31 +118,34 @@ class Ews:
     async def _once(self, operation: str, payload: bytes) -> list[etree._Element]:
         ref = secrets.token_hex(4)
         write = operation in WRITES
+
+        def unknown_outcome() -> ExchangeError:
+            # A write that may have reached Exchange is never reported as "nothing was done".
+            return ExchangeError("uncertain", ref=ref) if write else ExchangeError("busy", seconds=30)
+
         try:
-            r = await self._http.post(
-                self._url,
-                content=payload,
-                headers={"Content-Type": "text/xml; charset=utf-8", "Accept": "text/xml"},
-                auth=self._auth,
-            )
-        except httpx.TimeoutException:
-            log.warning("ews %s timed out ref=%s", operation, ref)
-            raise ExchangeError("uncertain", ref=ref) if write else ExchangeError("busy", seconds=30) from None
+            content, status = await self._post(payload)
+        except _TooLarge:
+            log.warning("ews %s response over %s bytes ref=%s", operation, MAX_RESPONSE_BYTES, ref)
+            raise ExchangeError("too_large", size="the answer", limit=f"{MAX_RESPONSE_BYTES // 2**20} MB") from None
+        except (httpx.ConnectError, httpx.ConnectTimeout):
+            log.warning("ews %s could not connect ref=%s", operation, ref)
+            raise ExchangeError("busy", seconds=30) from None  # never left this machine
         except httpx.HTTPError as e:
             log.warning("ews %s transport %s ref=%s", operation, type(e).__name__, ref)
-            raise ExchangeError("busy", seconds=30) from None
-        if r.status_code == 401:
+            raise unknown_outcome() from None
+        if status == 401:
             raise ExchangeError("reconnect")
-        if r.status_code == 403:
+        if status == 403:
             raise ExchangeError("forbidden")
-        if r.status_code >= 500 and not r.content.lstrip().startswith(b"<"):
-            log.warning("ews %s http %s ref=%s", operation, r.status_code, ref)
-            raise ExchangeError("uncertain", ref=ref) if write else ExchangeError("busy", seconds=30)
+        if status >= 500 and not content.lstrip().startswith(b"<"):
+            log.warning("ews %s http %s ref=%s", operation, status, ref)
+            raise unknown_outcome()
         try:
-            root = parse(r.content)
+            root = parse(content)
         except etree.XMLSyntaxError:
             log.warning("ews %s unparsable ref=%s", operation, ref)
-            raise ExchangeError("uncertain", ref=ref) if write else ExchangeError("busy", seconds=30) from None
+            raise unknown_outcome() from None
         fault = root.find(f"{q('s', 'Body')}/{q('s', 'Fault')}")
         if fault is not None:
             code = _fault_code(fault)
@@ -148,25 +153,61 @@ class Ews:
                 raise _Busy(_backoff(fault))
             log.warning("ews %s fault %s ref=%s", operation, code, ref)
             raise ExchangeError("failed", code=code, ref=ref)
-        body = root.find(q("s", "Body"))
+        body = root.find(q("s", "Body")) if etree.QName(root).localname == "Envelope" else None
         response = body[0] if body is not None and len(body) else None
+        if response is None or etree.QName(response).localname != f"{operation}Response":
+            # A proxy's error page or anything else that parses as XML is not an answer from EWS.
+            log.warning("ews %s unexpected answer ref=%s", operation, ref)
+            raise unknown_outcome()
         container = find(response, "m:ResponseMessages")
         if container is not None:
             messages = list(container)
             checked = messages
+            if not messages:
+                raise unknown_outcome()
         else:
             # Availability and automatic-reply operations answer with one ResponseMessage beside their data.
-            messages = [response] if response is not None else []
+            messages = [response]
             own = find(response, "m:ResponseMessage")
             checked = [own] if own is not None else []
-        for m in checked:
-            if m.get("ResponseClass") == "Error":
-                code = text(m, "m:ResponseCode", "ErrorUnknown")
-                if code == "ErrorServerBusy":
-                    raise _Busy(_backoff(m))
-                log.info("ews %s %s ref=%s", operation, code, ref)
-                raise _error(code, ref)
-        return messages
+        errors = [m for m in checked if m.get("ResponseClass") == "Error"]
+        if not errors:
+            return messages
+        busy = [m for m in errors if text(m, "m:ResponseCode") == "ErrorServerBusy"]
+        if busy and len(errors) == len(checked):
+            raise _Busy(_backoff(busy[0]))  # nothing in the batch happened: safe to send again
+        if write and len(errors) < len(checked):
+            # Part of a batch was applied. Sending it again would repeat what succeeded; saying it failed
+            # would hide it. Report it as partly done.
+            log.info("ews %s partial %s/%s ref=%s", operation, len(checked) - len(errors), len(checked), ref)
+            raise ExchangeError("partial", done=len(checked) - len(errors), total=len(checked), ref=ref)
+        code = text(errors[0], "m:ResponseCode", "ErrorUnknown")
+        log.info("ews %s %s ref=%s", operation, code, ref)
+        raise _error(code, ref)
+
+    async def _post(self, payload: bytes) -> tuple[bytes, int]:
+        """The answer, read up to MAX_RESPONSE_BYTES: an attachment or a body cannot make this process
+        allocate without bound."""
+        async with self._http.stream(
+            "POST",
+            self._url,
+            content=payload,
+            headers={"Content-Type": "text/xml; charset=utf-8", "Accept": "text/xml"},
+            auth=self._auth,
+        ) as r:
+            declared = r.headers.get("content-length", "")
+            if declared.isdigit() and int(declared) > MAX_RESPONSE_BYTES:
+                raise _TooLarge
+            buf = bytearray()
+            async for chunk in r.aiter_bytes():
+                buf.extend(chunk)
+                if len(buf) > MAX_RESPONSE_BYTES:
+                    raise _TooLarge
+            return bytes(buf), r.status_code
+
+
+class _TooLarge(Exception):
+    pass
 
 
 def operation_name(body: etree._Element) -> str:

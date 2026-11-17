@@ -144,20 +144,26 @@ class Provider:
         now = self._clock()
         for k in [k for k, exp in self._used_codes.items() if exp < now]:
             del self._used_codes[k]
-        while len(self._used_codes) >= USED_CODES_MAX:
-            del self._used_codes[next(iter(self._used_codes))]
+        if len(self._used_codes) >= USED_CODES_MAX:
+            # Forgetting a live code would make it redeemable again: refuse until codes expire instead.
+            raise TokenError(error="invalid_request", error_description="too many sign-ins at once; try again")
         self._used_codes[authorization_code.code] = authorization_code.expires_at
         cred = Credential.from_payload(p["c"])
         if cred is None:
             raise TokenError(error="invalid_grant", error_description="authorization code damaged")
+        if cred.mode == "adfs" and self._renew is not None:
+            cred = await self._renew(cred)  # a code can wait five minutes; the AD FS token inside may be near its end
         return await self._issue(client.client_id, cred, authorization_code.scopes, authorization_code.resource)
 
     # ---------------------------------------------------------------- tokens
     async def _issue(self, client_id: str, cred: Credential, scopes: list[str], resource: str | None) -> OAuthToken:
         body = {"client_id": client_id, "scopes": scopes, "resource": resource, "c": cred.to_payload()}
         access_ttl = ACCESS_TTL
-        if cred.mode == "adfs" and cred.access_exp:
-            access_ttl = max(60, min(ACCESS_TTL, int(cred.access_exp - self._clock())))
+        if cred.mode == "adfs":
+            left = int(cred.access_exp - self._clock())
+            if left <= 0:
+                raise TokenError(error="invalid_grant", error_description="the AD FS sign-in has ended; sign in again")
+            access_ttl = min(ACCESS_TTL, left)  # never past the AD FS token it carries
         return OAuthToken(
             access_token=await self.sealer.seal("access", body, access_ttl),
             token_type="Bearer",
@@ -208,6 +214,7 @@ class Provider:
         )
 
     async def revoke_token(self, token: AccessToken | RefreshToken) -> None:
-        """Nothing is stored, so there is nothing to delete: a token ends at its expiry or with the key.
-        The client forgets its tokens; the person ends everything at once by changing their password."""
-        return None
+        """Not offered: the revocation endpoint is off (app.py), because nothing is stored to revoke and
+        answering success would be a lie. Tokens end at their expiry, all of them with the key, and in
+        password mode with the person's password (docs/auth-modes.md)."""
+        raise NotImplementedError

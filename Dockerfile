@@ -3,9 +3,8 @@ FROM python:3.12-slim-bookworm@sha256:6a0e06f5ba0b373d051aabd3fffb9b873f27f9a2a3
 WORKDIR /src
 COPY requirements.lock ./
 RUN pip install --no-cache-dir --require-hashes --target /deps -r requirements.lock
-COPY pyproject.toml README.md ./
-COPY src ./src
-RUN pip install --no-cache-dir --no-deps --target /app .
+# The package is pure Python: copied as source, so no unlocked build backend runs.
+COPY src/exchange_mcp /app/exchange_mcp
 
 FROM python:3.12-slim-bookworm@sha256:6a0e06f5ba0b373d051aabd3fffb9b873f27f9a2a3a14bcbe37dee6f0e3bbc70
 RUN apt-get update && apt-get upgrade -y --no-install-recommends && rm -rf /var/lib/apt/lists/* \

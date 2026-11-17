@@ -1,0 +1,235 @@
+{
+  "tools": {
+    "cancel_event": {
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": true,
+        "readOnlyHint": false,
+        "title": "Cancel an event"
+      },
+      "area": "calendar",
+      "input_schema_sha256": "02c8b4cdedfae1e8f6d9dac43067662ca4f9cbb16ce3b947dbacbcfb4ba73d51"
+    },
+    "delete_contact": {
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false,
+        "title": "Delete a contact"
+      },
+      "area": "contacts",
+      "input_schema_sha256": "9dac75dbda255c76342fdde5d49cc446632daa004e7e8da8c9a82546eb00ec50"
+    },
+    "delete_mail_folder": {
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false,
+        "title": "Delete a mail folder"
+      },
+      "area": "mail",
+      "input_schema_sha256": "7eef334d720ae2fef8b499a33468cfcde0127eb6590916b97b763cf27d8c151a"
+    },
+    "delete_task": {
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false,
+        "title": "Delete a task"
+      },
+      "area": "tasks",
+      "input_schema_sha256": "ef8f7d6de1b4145ca97aa5cb05ced8df539e2071f645393fc78248b7e02375b0"
+    },
+    "find_meeting_times": {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true,
+        "title": "Find meeting times"
+      },
+      "area": "calendar",
+      "input_schema_sha256": "5d7f84c98dc480546ed55e1a6ecccc2141e8b80d44cd9aecc65e4639d9e66b08"
+    },
+    "get_connection": {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true,
+        "title": "Connection"
+      },
+      "area": "account",
+      "input_schema_sha256": "1831e96f8dcd928826894a0e437ae1e70d443e6f7ec6da7c2432a64be17bab8c"
+    },
+    "get_event": {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true,
+        "title": "Read an event"
+      },
+      "area": "calendar",
+      "input_schema_sha256": "d5ba4e011bd3c07fe523292762d677d836cc81501ff8d39a094ea87770151c93"
+    },
+    "get_message": {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true,
+        "title": "Read a message"
+      },
+      "area": "mail",
+      "input_schema_sha256": "e7cb6fa4067f07d134c1e127555206f88f5323bc8d47d45581b11f6c838f4443"
+    },
+    "list_events": {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true,
+        "title": "List events"
+      },
+      "area": "calendar",
+      "input_schema_sha256": "ffd3725fe687a0f539d5e9b7f4376db3628115605986ec0108b57ce5b8412843"
+    },
+    "list_messages": {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true,
+        "title": "Find mail"
+      },
+      "area": "mail",
+      "input_schema_sha256": "bc61ceee69ab6520eda4dd34239a64056cda269307d89f0d53e280b05e74d883"
+    },
+    "list_people": {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true,
+        "title": "Find people and rooms"
+      },
+      "area": "people",
+      "input_schema_sha256": "64bbe802a2364247e4483b1bc88f31a3990cbb59b7c5e041db70a38b9a2d6006"
+    },
+    "list_tasks": {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true,
+        "title": "List tasks"
+      },
+      "area": "tasks",
+      "input_schema_sha256": "1cfc0ccf9d4581ba586baca2dd35d54ae7e6fe93fa1f2d186911e4fe76698ff8"
+    },
+    "respond_to_event": {
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": true,
+        "readOnlyHint": false,
+        "title": "Answer an invitation"
+      },
+      "area": "calendar",
+      "input_schema_sha256": "86125473c5aa1af7cf65e0381c974e4f22363f3700c2f4b168d2586ba467f316"
+    },
+    "save_automatic_reply": {
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": true,
+        "readOnlyHint": false,
+        "title": "Automatic reply"
+      },
+      "area": "mail",
+      "input_schema_sha256": "0e3f0efc8f64aa6620b4d25ea357585b17046e2f04a1602b914c5cfa8e1c078a"
+    },
+    "save_contact": {
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false,
+        "title": "Save a contact"
+      },
+      "area": "contacts",
+      "input_schema_sha256": "2e2c55a8a25ba0f17b8378a02760b74cefcff6917fc895162ced7e1eff801948"
+    },
+    "save_draft": {
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false,
+        "title": "Save a draft"
+      },
+      "area": "mail",
+      "input_schema_sha256": "6422361fc5c433a1e33bfc916c71e7019824b2ec60e14596f8578868f1b1ca9f"
+    },
+    "save_event": {
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": true,
+        "readOnlyHint": false,
+        "title": "Save an event"
+      },
+      "area": "calendar",
+      "input_schema_sha256": "639c1b9ed9106ef28761a9e4c08567cda6188ecd49cef671e0df976a038583d5"
+    },
+    "save_mail_folder": {
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false,
+        "title": "Create or change a mail folder"
+      },
+      "area": "mail",
+      "input_schema_sha256": "6591ddd3dbe3d9a6ba066f564903062327401dceabc07015996c5a68e6bacfe8"
+    },
+    "save_task": {
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false,
+        "title": "Save a task"
+      },
+      "area": "tasks",
+      "input_schema_sha256": "40aaf374c0e87788a962ea3df0fab38418f49ac0380e2c7a0d533d37b8ab0e58"
+    },
+    "send_draft": {
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": true,
+        "readOnlyHint": false,
+        "title": "Send a draft"
+      },
+      "area": "mail",
+      "input_schema_sha256": "2ad7e12ec100f6fdd2ba3e6ce7ac560dfd64091417a5c0f6246342f9de8d6721"
+    },
+    "update_messages": {
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false,
+        "title": "Organise messages"
+      },
+      "area": "mail",
+      "input_schema_sha256": "73e520c919832fb582f62dfbb5a1e7bc03d3b8de9db2ea4c1f000b3c796e96f3"
+    }
+  }
+}

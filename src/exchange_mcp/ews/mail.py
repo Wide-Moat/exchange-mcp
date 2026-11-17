@@ -161,6 +161,7 @@ class Message:
     sender: dict[str, str]
     to: list[dict[str, str]]
     cc: list[dict[str, str]]
+    bcc: list[dict[str, str]]
     html: str
     unread: bool
     is_draft: bool
@@ -205,6 +206,7 @@ def _message(el: etree._Element) -> Message:
         sender=mailbox(find(el, "t:From/t:Mailbox")),
         to=_recipients(el, "t:ToRecipients"),
         cc=_recipients(el, "t:CcRecipients"),
+        bcc=_recipients(el, "t:BccRecipients"),
         html=text(el, "t:Body"),
         unread=not flag(el, "t:IsRead"),
         is_draft=flag(el, "t:IsDraft"),
@@ -231,6 +233,7 @@ async def get_message(ews: Ews, item: str, *, body: bool = True) -> Message:
         "message:From",
         "message:ToRecipients",
         "message:CcRecipients",
+        "message:BccRecipients",
         "message:IsRead",
     ]
     if body:
@@ -485,8 +488,8 @@ async def mail_tips(ews: Ews, sender: str, recipients: list[str]) -> dict[str, A
         )
     )
     out: dict[str, Any] = {"automatic_replies": [], "invalid": [], "full": []}
-    root = messages[0]
-    for mt in root.iter("{*}MailTips"):
+    sizes = []
+    for mt in (tip for m in messages for tip in m.iter("{*}MailTips")):
         addr = text(mt, "t:RecipientAddress/t:EmailAddress")
         if text(mt, "t:OutOfOffice/t:ReplyBody/t:Message").strip():
             out["automatic_replies"].append(addr)
@@ -496,7 +499,9 @@ async def mail_tips(ews: Ews, sender: str, recipients: list[str]) -> dict[str, A
             out["full"].append(addr)
         size = text(mt, "t:MaxMessageSize")
         if size.isdigit():
-            out["max_message_size"] = int(size)
+            sizes.append(int(size))
+    if sizes:
+        out["max_message_size"] = min(sizes)
     return out
 
 
@@ -553,14 +558,77 @@ async def set_oof(
     *,
     state: str,
     audience: str,
-    internal: str,
-    external: str,
+    internal: str | None,
+    external: str | None,
     start: str | None,
     end: str | None,
 ) -> None:
     settings = T.UserOofSettings(T.OofState(state), T.ExternalAudience(audience))
     if start and end:
         settings.append(T.Duration(T.StartTime(start), T.EndTime(end)))
-    settings.append(T.InternalReply(T.Message(internal)))
-    settings.append(T.ExternalReply(T.Message(external)))
+    if internal is not None:  # absent: Exchange keeps the saved reply texts
+        settings.append(T.InternalReply(T.Message(internal)))
+    if external is not None:
+        settings.append(T.ExternalReply(T.Message(external)))
     await ews.call(M.SetUserOofSettingsRequest(T.Mailbox(T.Address(me)), settings))
+
+
+# ---------------------------------------------------------------- the folder tree
+
+FOLDER_PAGE = 500
+
+
+@dataclass
+class RawFolder:
+    id: str
+    parent: str
+    name: str
+    unread: int
+    total: int
+    children: int
+    mail: bool
+
+
+async def folder_tree(ews: Ews, root: str) -> list[RawFolder]:
+    """Every folder under `root`, page by page until Exchange says the last is in range."""
+    out: list[RawFolder] = []
+    offset = 0
+    while True:
+        messages = await ews.call(
+            M.FindFolder(
+                M.FolderShape(
+                    T.BaseShape("IdOnly"),
+                    _fields(
+                        "folder:DisplayName",
+                        "folder:ParentFolderId",
+                        "folder:UnreadCount",
+                        "folder:TotalCount",
+                        "folder:ChildFolderCount",
+                        "folder:FolderClass",
+                    ),
+                ),
+                M.IndexedPageFolderView(MaxEntriesReturned=str(FOLDER_PAGE), Offset=str(offset), BasePoint="Beginning"),
+                M.ParentFolderIds(folder_id(root)),
+                Traversal="Deep",
+            )
+        )
+        rf = find(messages[0], "m:RootFolder")
+        page = findall(rf, "t:Folders/*")
+        for f in page:
+            cls = text(f, "t:FolderClass")
+            parent = f.find("{*}ParentFolderId")
+            out.append(
+                RawFolder(
+                    id=f.find("{*}FolderId").get("Id"),
+                    parent=parent.get("Id") if parent is not None else "",
+                    name=text(f, "t:DisplayName"),
+                    unread=int(text(f, "t:UnreadCount", "0") or 0),
+                    total=int(text(f, "t:TotalCount", "0") or 0),
+                    children=int(text(f, "t:ChildFolderCount", "0") or 0),
+                    mail=not cls or cls.startswith("IPF.Note"),
+                )
+            )
+        last = rf is None or rf.get("IncludesLastItemInRange", "true") == "true"
+        if last or not page or len(out) >= 20 * FOLDER_PAGE:
+            return out
+        offset += len(page)

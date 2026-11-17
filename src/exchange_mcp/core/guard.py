@@ -43,9 +43,13 @@ class Guard:
     def _take(self, person: str, kind: str) -> int:
         now = self._clock()
         if len(self._buckets) >= MAX_PEOPLE_TRACKED and person not in self._buckets:
+            # A full bucket is the same as no bucket: forgetting it changes nothing. A partly spent one is
+            # kept, and a newcomer waits rather than the table growing without bound.
             full = [p for p, b in self._buckets.items() if b.tokens + (now - b.at) * REFILL_PER_SECOND >= CAPACITY]
             for p in full:
                 del self._buckets[p]
+            if len(self._buckets) >= MAX_PEOPLE_TRACKED:
+                raise ExchangeError("busy", seconds=60)
         b = self._buckets.get(person)
         if b is None:
             b = self._buckets[person] = _Bucket(CAPACITY, now)

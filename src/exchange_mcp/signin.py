@@ -48,7 +48,8 @@ class SignIn:
             return _page(lang, heading=T[lang]["h1_again"], error=T[lang]["expired"], status=410)
         if self.adfs is not None:
             return RedirectResponse(await self.adfs.authorize_url(rid), status_code=302)
-        return _page(lang, form=_form(lang, rid))
+        p = await self.provider.sign_in_request(rid)
+        return _page(lang, form=_form(lang, rid), redirect=_origin(p))
 
     async def submit(self, request: Request) -> Response:
         lang = pick_lang(request.headers.get("accept-language", ""))
@@ -65,7 +66,7 @@ class SignIn:
         again = _form(lang, rid, typed)
         s = runtime().settings
         try:
-            login = normalise(typed, s.login_format, s.login_domain)
+            login = normalise(typed, s.login_format, s.login_domain, s.login_also)
         except BadLogin:
             login = None
         if login is None or not password or len(password) > MAX_PASSWORD:

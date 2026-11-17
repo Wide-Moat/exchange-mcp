@@ -62,11 +62,11 @@ class Adfs:
 
     def _load_key(self) -> rsa.RSAPrivateKey:
         from exchange_mcp.config import ConfigError
-        from exchange_mcp.keys.providers import exposed
+        from exchange_mcp.keys.providers import exposed, read_bounded
 
         path = self.a.signing_key_file
         try:
-            raw = path.read_bytes()
+            raw = read_bounded(path)
         except OSError:
             raise ConfigError("the AD FS signing key file cannot be read") from None
         if exposed(path.stat()):

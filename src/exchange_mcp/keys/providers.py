@@ -30,6 +30,18 @@ def exposed(st: os.stat_result) -> bool:
     return bool(mode & stat.S_IRWXG) and st.st_gid not in {os.getgid(), *os.getgroups()}
 
 
+MAX_SECRET_FILE = 64 * 1024
+
+
+def read_bounded(path: Path, limit: int = MAX_SECRET_FILE) -> bytes:
+    """A secret file, refused when larger than any real one: a wrong mount cannot exhaust memory."""
+    with path.open("rb") as f:
+        data = f.read(limit + 1)
+    if len(data) > limit:
+        raise ConfigError(f"{path.name} is larger than {limit} bytes; it is not a key file")
+    return data
+
+
 def read_key_file(path: Path) -> list[tuple[str, bytes]]:
     try:
         st = path.stat()
@@ -41,7 +53,11 @@ def read_key_file(path: Path) -> list[tuple[str, bytes]]:
             "with the pod's fsGroup"
         )
     keys: list[tuple[str, bytes]] = []
-    for n, line in enumerate(path.read_text().splitlines(), 1):
+    try:
+        lines = read_bounded(path).decode("ascii").splitlines()
+    except (OSError, UnicodeDecodeError):
+        raise ConfigError("the key file cannot be read as text") from None
+    for n, line in enumerate(lines, 1):
         line = line.strip()
         if not line:
             continue
@@ -52,6 +68,8 @@ def read_key_file(path: Path) -> list[tuple[str, bytes]]:
             key = b""
         if not kid or len(key) != KEY_BYTES:
             raise ConfigError(f"the key file line {n} is not <key id>:<base64url of 32 bytes>")
+        if any(kid == k for k, _ in keys):
+            raise ConfigError(f"the key file names key id {kid} twice; a rotation adds a new id on top")
         keys.append((kid, key))
     if not keys:
         raise ConfigError("the key file holds no key")

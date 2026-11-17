@@ -82,6 +82,8 @@ class LocalSealer:
                 raise ValueError("a key id is 1-32 characters without a dot")
             if len(key) != KEY_BYTES:
                 raise ValueError("a key is exactly 32 bytes")
+        if len({kid for kid, _ in keys}) != len(keys):
+            raise ValueError("key ids must be unique")
         self._active = keys[0][0]
         self._aead = {kid: AESGCM(key) for kid, key in keys}
         self._clock = clock
