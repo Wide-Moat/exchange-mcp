@@ -151,7 +151,7 @@ async def steps(s: ClientSession, to: str, created: dict) -> None:
     # ------------------------------------------------ forward and reply-all keep the thread
     err, fw, text = await call(s, "save_draft", mode="forward", message=sent_id, to=[to], body=f"Forward: {TAG}")
     expect(
-        not err and fw.get("subject", "").lower().startswith(("fw", "tr", "wg", "пере")),
+        not err and fw.get("subject", "").endswith(TAG) and fw.get("subject") != TAG,
         f"save_draft forward ({text[:80] if err else ''})",
     )
     created["drafts"].append(fw["id"])
@@ -160,7 +160,7 @@ async def steps(s: ClientSession, to: str, created: dict) -> None:
     created["drafts"].remove(fw["id"])
     err, ra, text = await call(s, "save_draft", mode="reply_all", message=sent_id, body=f"Reply all: {TAG}")
     expect(
-        not err and ra.get("subject", "").lower().startswith(("re", "aw", "отв")),
+        not err and ra.get("subject", "").endswith(TAG) and ra.get("subject") != TAG,
         f"save_draft reply_all ({text[:80] if err else ''})",
     )
     err, _, _ = await call(s, "update_messages", ids=[ra["id"]], action="delete")

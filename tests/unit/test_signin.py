@@ -264,5 +264,7 @@ async def test_a_non_ascii_form_token_is_refused_not_a_crash(ews):
     cid = await f.register()
     rid = await f.request_id(cid, _pkce()[1])
     await f.client.get("/signin", params={"request": rid})  # the page sets its cookie
-    r = await f.client.post("/signin", data={"request": rid, "login": "a", "password": "b", "form": "токен"})
+    r = await f.client.post(
+        "/signin", data={"request": rid, "login": "a", "password": "b", "form": "t\u00f6k\u00e9n-\u0442"}
+    )
     assert r.status_code == 403

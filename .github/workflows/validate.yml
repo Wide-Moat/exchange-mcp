@@ -183,10 +183,12 @@ jobs:
       - name: a key in the environment stops the server
         run: |
           set -uo pipefail
+          set +e  # the server is expected to refuse to start; the step checks why
           out=$(docker run --rm -e EXCHANGE_MCP_PUBLIC_URL=https://mcp.example.com \
             -e EXCHANGE_MCP_EWS_URL=https://mail.example.com/EWS/Exchange.asmx -e EXCHANGE_MCP_AUTH_MODE=password \
             -e EXCHANGE_MCP_LOGIN_DOMAIN=corp.example -e EXCHANGE_MCP_KEY_PROVIDER=memory \
             -e EXCHANGE_MCP_SECRET=abcdefabcdefabcdefabcdefabcdefabcdef exchange-mcp:ci 2>&1); code=$?
+          set -e
           echo "$out" | tail -3
           test "$code" -ne 0 && echo "$out" | grep -q "never read from the environment"
       - name: starts with a generated key file and answers

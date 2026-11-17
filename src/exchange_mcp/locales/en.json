@@ -1,0 +1,20 @@
+{
+  "an_app": "An application",
+  "connect": "Connect",
+  "consent": "<b>{app}</b> at <b>{host}</b> asks for your mailbox: it will read and organise your mail, calendar, contacts and tasks, and send only what you confirm. Sign in only if you started this connection yourself.",
+  "continue": "Continue to sign in",
+  "description": "Sign in to your work mailbox to connect it to your AI app.",
+  "expired": "This sign-in link has expired or was already used. Connect again from your AI app.",
+  "h1": "Sign in to your mailbox",
+  "h1_again": "Connect again",
+  "lede": "Use the login and password you use for work e-mail.",
+  "limited": "Too many attempts. Wait 15 minutes before trying again.",
+  "login": "Login",
+  "login_hint": "name, DOMAIN\\name or name@domain",
+  "note": "This connector keeps your password encrypted inside your app's connection and uses it only to reach your mailbox. Mail goes out only after you confirm it.",
+  "password": "Password",
+  "title": "Sign in to Exchange",
+  "unavailable": "Exchange did not answer. Try again in a few minutes.",
+  "unknown_client": "This server no longer knows your AI app's connection: the server was updated or its key changed. In your AI app, clear the authorization for this connector and connect again.",
+  "wrong": "The login or password was not accepted."
+}

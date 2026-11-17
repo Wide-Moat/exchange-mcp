@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import hmac
 import html
+import json
 import logging
 import secrets
 from pathlib import Path
@@ -154,143 +155,18 @@ async def static(request: Request) -> Response:
 
 # ---------------------------------------------------------------- language
 
-T: dict[str, dict[str, str]] = {
-    "en": {
-        "an_app": "An application",
-        "consent": "<b>{app}</b> at <b>{host}</b> asks for your mailbox: it will read and organise your mail, calendar, contacts and tasks, and send only what you confirm. Sign in only if you started this connection yourself.",
-        "continue": "Continue to sign in",
-        "title": "Sign in to Exchange",
-        "description": "Sign in to your work mailbox to connect it to your AI app.",
-        "h1": "Sign in to your mailbox",
-        "lede": "Use the login and password you use for work e-mail.",
-        "login": "Login",
-        "login_hint": "name, DOMAIN\\name or name@domain",
-        "password": "Password",
-        "connect": "Connect",
-        "note": (
-            "This connector keeps your password encrypted inside your app's connection and uses it only to reach "
-            "your mailbox. Mail goes out only after you confirm it."
-        ),
-        "wrong": "The login or password was not accepted.",
-        "limited": "Too many attempts. Wait 15 minutes before trying again.",
-        "unavailable": "Exchange did not answer. Try again in a few minutes.",
-        "h1_again": "Connect again",
-        "expired": "This sign-in link has expired or was already used. Connect again from your AI app.",
-        "unknown_client": (
-            "This server no longer knows your AI app's connection: the server was updated or its key changed. "
-            "In your AI app, clear the authorization for this connector and connect again."
-        ),
-    },
-    "ru": {
-        "an_app": "Приложение",
-        "consent": "<b>{app}</b> с адресом <b>{host}</b> просит доступ к вашей почте: читать и упорядочивать письма, календарь, контакты и задачи и отправлять только то, что вы подтвердите. Входите, только если подключение начали вы сами.",
-        "continue": "Продолжить вход",
-        "title": "Вход в почту Exchange",
-        "description": "Войдите в рабочую почту, чтобы подключить её к ИИ-приложению.",
-        "h1": "Вход в рабочую почту",
-        "lede": "Логин и пароль те же, что для рабочей почты.",
-        "login": "Логин",
-        "login_hint": "имя, ДОМЕН\\имя или имя@домен",
-        "password": "Пароль",
-        "connect": "Подключить",
-        "note": (
-            "Коннектор хранит пароль зашифрованным внутри подключения вашего приложения и использует его только "
-            "для доступа к вашей почте. Письма уходят только после вашего подтверждения."
-        ),
-        "wrong": "Логин или пароль не подошли.",
-        "limited": "Слишком много попыток. Подождите 15 минут и попробуйте снова.",
-        "unavailable": "Exchange не ответил. Попробуйте через несколько минут.",
-        "h1_again": "Подключитесь заново",
-        "expired": "Ссылка для входа устарела или уже использована. Подключитесь заново из ИИ-приложения.",
-        "unknown_client": (
-            "Сервер больше не узнаёт подключение вашего ИИ-приложения: его обновили или сменили ключ. "
-            "В ИИ-приложении сбросьте авторизацию этого коннектора и подключитесь заново."
-        ),
-    },
-    "es": {
-        "an_app": "Una aplicación",
-        "consent": "<b>{app}</b> en <b>{host}</b> solicita acceso a su buzón: leerá y organizará su correo, calendario, contactos y tareas, y solo enviará lo que usted confirme. Inicie sesión solo si usted mismo inició esta conexión.",
-        "continue": "Continuar con el inicio de sesión",
-        "title": "Iniciar sesión en Exchange",
-        "description": "Inicie sesión en su correo de trabajo para conectarlo a su aplicación de IA.",
-        "h1": "Iniciar sesión en el correo",
-        "lede": "Use el usuario y la contraseña de su correo de trabajo.",
-        "login": "Usuario",
-        "login_hint": "nombre, DOMINIO\\nombre o nombre@dominio",
-        "password": "Contraseña",
-        "connect": "Conectar",
-        "note": (
-            "Este conector guarda su contraseña cifrada dentro de la conexión de su aplicación y solo la usa para "
-            "acceder a su buzón. Los correos se envían solo después de que usted lo confirme."
-        ),
-        "wrong": "El usuario o la contraseña no se aceptaron.",
-        "limited": "Demasiados intentos. Espere 15 minutos antes de volver a intentarlo.",
-        "unavailable": "Exchange no respondió. Inténtelo de nuevo en unos minutos.",
-        "h1_again": "Vuelva a conectar",
-        "expired": "Este enlace de inicio de sesión caducó o ya se usó. Vuelva a conectar desde su aplicación de IA.",
-        "unknown_client": (
-            "Este servidor ya no reconoce la conexión de su aplicación de IA: el servidor se actualizó o cambió su "
-            "clave. En su aplicación de IA, borre la autorización de este conector y vuelva a conectar."
-        ),
-    },
-    "de": {
-        "an_app": "Eine Anwendung",
-        "consent": "<b>{app}</b> unter <b>{host}</b> möchte auf Ihr Postfach zugreifen: E-Mails, Kalender, Kontakte und Aufgaben lesen und ordnen und nur senden, was Sie bestätigen. Melden Sie sich nur an, wenn Sie diese Verbindung selbst begonnen haben.",
-        "continue": "Weiter zur Anmeldung",
-        "title": "Bei Exchange anmelden",
-        "description": "Melden Sie sich bei Ihrem dienstlichen Postfach an, um es mit Ihrer KI-App zu verbinden.",
-        "h1": "Am Postfach anmelden",
-        "lede": "Verwenden Sie Benutzername und Kennwort Ihrer dienstlichen E-Mail.",
-        "login": "Benutzername",
-        "login_hint": "name, DOMÄNE\\name oder name@domäne",
-        "password": "Kennwort",
-        "connect": "Verbinden",
-        "note": (
-            "Dieser Connector speichert Ihr Kennwort verschlüsselt in der Verbindung Ihrer App und nutzt es nur für "
-            "den Zugriff auf Ihr Postfach. E-Mails werden erst nach Ihrer Bestätigung gesendet."
-        ),
-        "wrong": "Benutzername oder Kennwort wurden nicht akzeptiert.",
-        "limited": "Zu viele Versuche. Warten Sie 15 Minuten, bevor Sie es erneut versuchen.",
-        "unavailable": "Exchange hat nicht geantwortet. Versuchen Sie es in einigen Minuten erneut.",
-        "h1_again": "Erneut verbinden",
-        "expired": "Dieser Anmeldelink ist abgelaufen oder wurde bereits verwendet. Verbinden Sie sich erneut aus "
-        "Ihrer KI-App.",
-        "unknown_client": (
-            "Dieser Server erkennt die Verbindung Ihrer KI-App nicht mehr: Der Server wurde aktualisiert oder sein "
-            "Schlüssel geändert. Entfernen Sie in Ihrer KI-App die Autorisierung dieses Connectors und verbinden "
-            "Sie sich erneut."
-        ),
-    },
-    "fr": {
-        "an_app": "Une application",
-        "consent": "<b>{app}</b> sur <b>{host}</b> demande l'accès à votre messagerie : il lira et organisera vos messages, agenda, contacts et tâches, et n'enverra que ce que vous confirmez. Ne vous connectez que si vous avez vous-même lancé cette connexion.",
-        "continue": "Continuer la connexion",
-        "title": "Connexion à Exchange",
-        "description": "Connectez-vous à votre messagerie professionnelle pour la relier à votre application d'IA.",
-        "h1": "Connexion à la messagerie",
-        "lede": "Utilisez l'identifiant et le mot de passe de votre messagerie professionnelle.",
-        "login": "Identifiant",
-        "login_hint": "nom, DOMAINE\\nom ou nom@domaine",
-        "password": "Mot de passe",
-        "connect": "Se connecter",
-        "note": (
-            "Ce connecteur conserve votre mot de passe chiffré dans la connexion de votre application et ne "
-            "l'utilise que pour accéder à votre boîte aux lettres. Les messages ne partent qu'après votre "
-            "confirmation."
-        ),
-        "wrong": "L'identifiant ou le mot de passe n'a pas été accepté.",
-        "limited": "Trop de tentatives. Attendez 15 minutes avant de réessayer.",
-        "unavailable": "Exchange n'a pas répondu. Réessayez dans quelques minutes.",
-        "h1_again": "Reconnectez-vous",
-        "expired": "Ce lien de connexion a expiré ou a déjà été utilisé. Reconnectez-vous depuis votre application "
-        "d'IA.",
-        "unknown_client": (
-            "Ce serveur ne reconnaît plus la connexion de votre application d'IA : le serveur a été mis à jour ou "
-            "sa clé a changé. Dans votre application d'IA, supprimez l'autorisation de ce connecteur et "
-            "reconnectez-vous."
-        ),
-    },
-}
+LOCALES = Path(__file__).resolve().parent / "locales"
+
+
+def _load_locales() -> dict[str, dict[str, str]]:
+    """The sign-in page's words, one file per language. English is the reference: a language missing a
+    key falls back to it rather than showing a key name."""
+    words = {p.stem: json.loads(p.read_text(encoding="utf-8")) for p in sorted(LOCALES.glob("*.json"))}
+    base = words["en"]
+    return {lang: {**base, **w} for lang, w in words.items()}
+
+
+T: dict[str, dict[str, str]] = _load_locales()
 
 
 def pick_lang(accept: str) -> str:
