@@ -137,7 +137,7 @@ async def _sender_search(c, sender: str) -> tuple[str, str | None, str | None]:
     return f'from:"{term}"', address.lower(), owner_name
 
 
-async def _from_matches(addresses: _Addresses, m: em.Listing, address: str, owner_name: str | None) -> bool:
+async def _from_matches(addresses: _Addresses, m: em.Listing, address: str) -> bool:
     shown = await addresses.of(m.sender, m.sender_smtp)
     # Only a confirmed address counts: a matching name alone could be a namesake, so a sender Exchange
     # cannot turn into an address is left out rather than guessed in.
@@ -263,7 +263,7 @@ async def list_messages(
                 and (until_dt is None or _received(m) is None or _received(m) < until_dt)
             ]
         if from_address:
-            found = [m for m in found if await _from_matches(addresses, m, from_address, from_name)]
+            found = [m for m in found if await _from_matches(addresses, m, from_address)]
         html, got = await _previews(c, found)
         rows = [await _listing(addresses, m, tz, at.label, _preview(html.get(m.id, ""))) for m in found]
         nxt = await c.cursor_out({"o": page.next_offset} if page.next_offset is not None else None, scope)
