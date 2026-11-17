@@ -58,7 +58,7 @@ def test_stylesheet_hiding_is_honoured():
         "span.tiny, .zero { font-size: 0 }"
         "aside{opacity:0}"
         ".wow{color:#fff;background:#ffffff}"
-        "div.box > b{max-height:0}"
+        "div.box > b{max-height:0;overflow:hidden}"
         "@media screen { .scr { display: none } }"
         "</style>"
         '<p class="h">concealed</p>'
@@ -170,3 +170,43 @@ def test_child_combinator_is_evaluated_against_the_real_parent():
         html_to_text(css + '<html><body><p class="x">gone</p><div><p class="x">Kept</p></div></body></html>') == "Kept"
     )
     assert html_to_text("<style>html > body .y{display:none}</style><div class=y>gone</div>ok") == "ok"
+
+
+def test_self_closing_non_void_element_is_only_a_start_tag():
+    assert html_to_text("<div hidden/>secret</div>ok") == "ok"
+    assert html_to_text('<span style="display:none"/>secret</span>ok') == "ok"
+    assert html_to_text("<p>a<br/>b</p>") == "a\nb"
+
+
+def test_visibility_hidden_can_be_set_back_to_visible_by_a_descendant():
+    inner = '<span style="visibility:visible">Important</span>'
+    assert html_to_text(f'<div style="visibility:hidden">gone{inner}</div>') == "Important"
+    assert html_to_text('<div style="visibility:hidden"><p>gone</p></div>ok') == "ok"
+    assert (
+        html_to_text("<style>.h{visibility:hidden}.v{visibility:visible}</style><div class=h><b class=v>Yes</b></div>")
+        == "Yes"
+    )
+    # display:none is not overridable.
+    assert html_to_text('<div style="display:none"><span style="visibility:visible">gone</span></div>') == ""
+
+
+def test_zero_max_size_hides_only_with_clipping_overflow():
+    assert html_to_text('<div style="max-height:0;overflow:visible">Fact</div>') == "Fact"
+    assert html_to_text('<div style="max-width:0">Fact</div>') == "Fact"
+    assert html_to_text('<div style="max-height:0;overflow:hidden">gone</div>') == ""
+    assert html_to_text('<div style="max-width:0;overflow:clip">gone</div>') == ""
+    assert html_to_text('<div style="max-height:0;overflow-y:hidden">gone</div>') == ""
+
+
+def test_style_media_attribute_is_honoured():
+    rule = "<style{m}>.x{{display:none}}</style><p class=x>{t}</p>"
+    assert html_to_text(rule.format(m=' media="print"', t="Seen")) == "Seen"
+    assert html_to_text(rule.format(m=' media="speech"', t="Seen")) == "Seen"
+    for m in ("", ' media=""', ' media="all"', ' media="screen"'):
+        assert html_to_text(rule.format(m=m, t="gone")) == "", m
+
+
+def test_css_comments_are_removed_before_parsing():
+    assert html_to_text('<div style="display:/**/none">x</div>ok') == "ok"
+    assert html_to_text("<style>.x{display:/*a*/none}</style><p class=x>x</p>ok") == "ok"
+    assert html_to_text("<style>.x{/*a;b*/display:none}</style><p class=x>x</p>ok") == "ok"

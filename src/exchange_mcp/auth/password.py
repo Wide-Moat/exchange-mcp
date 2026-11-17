@@ -35,10 +35,13 @@ async def check(http: httpx.AsyncClient, ews_url: str, login: str, password: str
         if e.key == "reconnect":
             raise SignInFailed from None
         raise
+    # Strongest evidence first, and a weaker kind only when no stronger one names anyone: the alias is the
+    # account's own; the address equal to the UPN is next. A matching local part alone is a coincidence of
+    # names, not ownership, so it is never used.
     login_l, me_l = login.lower(), me.lower()
-    mine = [
-        p for p in found if me_l in (p.alias.lower(), p.address.split("@")[0].lower()) or p.address.lower() == login_l
-    ]
+    mine = [p for p in found if p.alias and p.alias.lower() == me_l]
+    if not mine:
+        mine = [p for p in found if p.address.lower() == login_l]
     if len(mine) != 1:
         # Authenticated, but the directory does not say which mailbox is this login's. Refuse rather than
         # guess: a wrong guess would show someone else's name and address as "you".

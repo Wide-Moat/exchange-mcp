@@ -12,6 +12,12 @@ on:
 permissions:
   contents: read
 
+# One publication per ref at a time; a newer push to main waits for the running one, never cancels it
+# (a cancelled publish could leave an image pushed and unscanned).
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   image:
     permissions:
@@ -26,6 +32,10 @@ jobs:
   trivy:
     needs: image
     runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
     permissions:
       contents: read
       packages: read
@@ -37,7 +47,7 @@ jobs:
         run: |
           set -uo pipefail
           url="https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
-          curl -fsSL --retry 3 -o /tmp/trivy.tar.gz "$url"
+          curl -fsSL --retry 3 --connect-timeout 20 --max-time 300 -o /tmp/trivy.tar.gz "$url"
           size=$(wc -c < /tmp/trivy.tar.gz)
           [ "$size" -gt 10000000 ] || { echo "archive is only ${size} bytes"; exit 1; }
           tar -xzf /tmp/trivy.tar.gz -C /tmp trivy && chmod +x /tmp/trivy

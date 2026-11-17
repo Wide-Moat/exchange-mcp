@@ -381,6 +381,9 @@ async def update_event(ews: Ews, item: str, ck: str, f: EventFields, *, send: bo
                     T.SetItemField(T.FieldURI(FieldURI=uri), T.CalendarItem(T.ReminderMinutesBeforeStart(str(value))))
                 )
             continue
+        if attr == "required":
+            # get_event shows required and optional attendees as one list, so a new list replaces both.
+            updates.append(T.DeleteItemField(T.FieldURI(FieldURI="calendar:OptionalAttendees")))
         if attr in ("required", "rooms") and not value:
             updates.append(T.DeleteItemField(T.FieldURI(FieldURI=uri)))
             continue
@@ -502,7 +505,8 @@ async def availability(
                 T.GoodThreshold("25"),
                 T.MaximumResultsByDay("10"),
                 T.MaximumNonWorkHourResultsByDay("0" if working_hours_only else "10"),
-                T.MeetingDurationInMinutes(str(duration)),
+                # EWS accepts 30 to 1440 here; a shorter meeting fits in any 30-minute slot it suggests.
+                T.MeetingDurationInMinutes(str(min(max(duration, 30), 1440))),
                 T.MinimumSuggestionQuality("Excellent"),  # Excellent: everyone free; Good allows conflicts
                 T.DetailedSuggestionsWindow(T.StartTime(_naive(start)), T.EndTime(_naive(end))),
             )

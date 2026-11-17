@@ -65,6 +65,7 @@ POST /mcp  Authorization: Bearer <sealed access token>
 | `EXCHANGE_MCP_BASE_URL` | this server's public address; issuer of its tokens |
 | `EXCHANGE_MCP_LINKS_BASE_URL` | address of the link port as sandboxes reach it |
 | `EXCHANGE_MCP_AREAS` | the areas published |
+| `EXCHANGE_MCP_CLIENT_HOSTS` | optional: the only hosts MCP clients may register redirect addresses on (the organisation's chat or gateway); empty allows any https or loopback address |
 | `EXCHANGE_MCP_SIGNIN_LIMITS` | attempts per login and per network per 15 minutes |
 
 Names of hosts, domains and people never appear in this repository; they live in the

@@ -182,7 +182,11 @@ def sealer() -> LocalSealer:
 
 
 @pytest.fixture
-def http(ews: FakeEws) -> httpx.AsyncClient:
+def http(ews: FakeEws, monkeypatch) -> httpx.AsyncClient:
+    from exchange_mcp.ews import client as ews_client
+
+    # NTLM calls get a client of their own; here it reaches the same fake Exchange.
+    monkeypatch.setattr(ews_client, "isolated", lambda: httpx.AsyncClient(transport=httpx.MockTransport(ews.handler)))
     return httpx.AsyncClient(transport=httpx.MockTransport(ews.handler))
 
 

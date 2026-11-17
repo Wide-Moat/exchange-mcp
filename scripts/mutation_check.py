@@ -400,6 +400,81 @@ MUTATIONS = [
         [("        if any(kid == k for k, _ in keys):", "        if False:")],
         "tests/unit/test_review_fixes.py",
     ),
+    (
+        "the AD FS callback belongs to the browser that agreed",
+        "auth/adfs.py",
+        [
+            (
+                'if state is None or not code or not browser or not hmac.compare_digest(browser, state.get("b", "")):',
+                "if state is None or not code:",
+            )
+        ],
+        "tests/unit/test_adfs.py",
+    ),
+    (
+        "a refresh does not extend the session",
+        "oauth/provider.py",
+        [
+            (
+                '            refresh_token=await self.sealer.seal("refresh", body, session_left),',
+                '            refresh_token=await self.sealer.seal("refresh", body, self._refresh_ttl),',
+            ),
+            (
+                "        session_left = int(started + self._refresh_ttl - self._clock())",
+                "        session_left = self._refresh_ttl",
+            ),
+        ],
+        "tests/unit/test_oauth.py",
+    ),
+    (
+        "only the operator's client hosts register",
+        "oauth/provider.py",
+        [("            if self._client_hosts and host not in self._client_hosts:", "            if False:")],
+        "tests/unit/test_oauth.py",
+    ),
+    (
+        "a namesake is not the person",
+        "auth/password.py",
+        [
+            (
+                "        mine = [p for p in found if p.address.lower() == login_l]",
+                "        mine = [p for p in found if p.address.lower() == login_l"
+                " or p.address.split('@')[0].lower() == me_l]",
+            )
+        ],
+        "tests/unit/test_review_fixes.py",
+    ),
+    (
+        "a list behind a secondary address is refused",
+        "core/resolve.py",
+        [
+            (
+                "primary address.\n            return _no_group(found[0])",
+                "primary address.\n            return found[0]",
+            )
+        ],
+        "tests/unit/test_review_fixes.py",
+    ),
+    (
+        "an opened blob does not expand without bound",
+        "keys/seal.py",
+        [
+            ("        plain = d.decompress(raw, MAX_PLAIN)", "        plain = zlib.decompress(raw)"),
+            ("        if d.unconsumed_tail or not d.eof:", "        if False:"),
+        ],
+        "tests/unit/test_review_fixes.py",
+    ),
+    (
+        "the sign-in page names the application",
+        "signin.py",
+        [
+            (
+                "        return _page(lang, form=consent + _form(lang, rid), redirect=_origin(p))",
+                "        return _page(lang, form=_form(lang, rid), redirect=_origin(p))",
+            )
+        ],
+        "tests/unit/test_signin.py",
+    ),
 ]
 
 

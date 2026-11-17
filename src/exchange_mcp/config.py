@@ -117,6 +117,7 @@ class Settings:
     login_format: LoginFormat = "upn"
     login_domain: str = ""
     login_also: frozenset[str] = frozenset()
+    client_hosts: frozenset[str] = frozenset()  # empty: any https or loopback redirect may register
     key_file: Path | None = None
     vault: Vault | None = None
     adfs: Adfs | None = None
@@ -193,6 +194,7 @@ class Settings:
             login_format=login_format,  # type: ignore[arg-type]
             login_domain=login_domain,
             login_also=login_also,
+            client_hosts=frozenset(h.strip().lower() for h in get("CLIENT_HOSTS").split(",") if h.strip()),
             key_file=_file(f"{PREFIX}KEY_FILE", get("KEY_FILE"), required=provider == "file"),
             vault=vault,
             adfs=adfs,

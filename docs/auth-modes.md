@@ -62,12 +62,22 @@ tokens is the normalised login, so one person has one identity whichever way the
 | A password opens more than mail | only an allowlist of EWS operations is sent; rules, forwarding, delegates and other mailboxes do not exist here | outside this server, a leaked password is a leaked account |
 | No second factor | n/a | none; this is the main reason `adfs` is preferred |
 | Guessing passwords, locking accounts | attempts limited per login (5 in 15 minutes) and per network (20); an unknown login and a wrong password answer alike | set the limit below the directory's lockout threshold |
-| A refresh token carries the password for a long time | refresh tokens in `password` mode live 12 hours by default, 24 at most; rotating the key ends all of them | none |
+| A refresh token carries the password for a long time | a session lasts 12 hours from sign-in in `password` mode (24 at most) and 30 days in `adfs`; refreshing renews the access token, never the session; rotating the key ends all of them | none |
 | A stolen token used elsewhere | tokens are sealed with AES-GCM and bound to kind, person, client, expiry and key id; without the key they are noise | a token stolen together with the key opens the password |
 | A token cannot be revoked one by one | nothing is stored, so there is nothing to strike out; the revocation endpoint is off rather than answering a false success | a stolen token works until it expires (access: 1 hour; refresh: 12 hours by default in `password` mode). Changing the password ends that person's tokens; rotating the key ends everyone's |
-| A refresh token can be used more than once | it is bound to its client and expires; there is no store in which to detect reuse | a copied refresh token keeps working beside the real one until it expires |
+| A refresh token can be used more than once | it is bound to its client and ends with the session; there is no store in which to detect reuse | a copied refresh token keeps working beside the real one until the session ends |
 | Attachment links carry the sealed credential in their URL | the link lives 300 seconds (upload 180), is bound to one person and one attachment, and is useless without the key | a link copied from a sandbox log within those seconds fetches that one attachment |
 | TLS to an internal CA | the operator's CA bundle; verification cannot be turned off; `https` only | none |
+
+## Who gets the mailbox
+
+Any MCP client can register itself, so the sign-in page says which application asks and at which
+address it receives the answer, before anything else happens. In `adfs` mode that page has its own
+button: AD FS may sign the person in without a question (single sign-on), and the person must see the
+application first. The browser that pressed the button is the one that must come back from AD FS: a
+nonce in a cookie, the same nonce sealed in the AD FS state, compared at the callback. An operator can
+also name the only hosts clients may register (`EXCHANGE_MCP_CLIENT_HOSTS`), for example the
+organisation's chat.
 
 ## The sealing key
 

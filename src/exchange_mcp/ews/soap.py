@@ -20,7 +20,9 @@ S = ElementMaker(namespace=NS_S, nsmap=NSMAP)
 M = ElementMaker(namespace=NS_M, nsmap=NSMAP)
 T = ElementMaker(namespace=NS_T, nsmap=NSMAP)
 
-_PARSER = etree.XMLParser(resolve_entities=False, no_network=True, load_dtd=False, huge_tree=False)
+# huge_tree lifts libxml2's 10 MB limit on one text node: GetAttachment carries a whole file's base64 in one.
+# The answer is already capped at MAX_RESPONSE_BYTES before parsing; entities, DTDs and network stay off.
+_PARSER = etree.XMLParser(resolve_entities=False, no_network=True, load_dtd=False, huge_tree=True)
 
 
 def envelope(body: etree._Element, *, version: str, timezone_id: str | None) -> bytes:

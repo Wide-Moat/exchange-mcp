@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import secrets
+from collections.abc import Callable
 from dataclasses import dataclass
 
 import httpx
@@ -21,6 +22,7 @@ from lxml import etree
 
 from exchange_mcp.core.errors import ExchangeError
 from exchange_mcp.ews.soap import envelope, find, findall, parse, q, text
+from exchange_mcp.ews.transport import Ntlm
 
 log = logging.getLogger("exchange_mcp.ews")
 
@@ -60,6 +62,9 @@ WRITES = frozenset(
     }
 )
 ALLOWED = READS | WRITES
+
+# Set by the app: makes a one-connection client with the same TLS settings, for NTLM calls.
+isolated: Callable[[], httpx.AsyncClient] | None = None
 
 BUSY_RETRIES = 2
 BUSY_MAX_WAIT = 5.0
@@ -189,8 +194,18 @@ class Ews:
 
     async def _post(self, payload: bytes) -> tuple[bytes, int]:
         """The answer, read up to MAX_RESPONSE_BYTES: an attachment or a body cannot make this process
-        allocate without bound."""
-        async with self._http.stream(
+        allocate without bound.
+
+        NTLM authenticates a connection, and its three legs must travel on one. The shared pool may hand a
+        later leg another connection when calls run at once, so an NTLM call gets a client of its own with
+        a single connection, closed when the call ends."""
+        if isolated is not None and isinstance(self._auth, Ntlm):
+            async with isolated() as own:
+                return await self._read(own, payload)
+        return await self._read(self._http, payload)
+
+    async def _read(self, http: httpx.AsyncClient, payload: bytes) -> tuple[bytes, int]:
+        async with http.stream(
             "POST",
             self._url,
             content=payload,

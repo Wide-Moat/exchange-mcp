@@ -30,16 +30,23 @@ from exchange_mcp.signin import AuthorizeErrorPage, SignIn, static
 log = logging.getLogger("exchange_mcp")
 
 
-def http_client(settings: Settings) -> httpx.AsyncClient:
+def http_client(settings: Settings, *, connections: int | None = None) -> httpx.AsyncClient:
     """TLS is always verified, against the operator's CA bundle when there is one (manifesto rule 22)."""
     verify: ssl.SSLContext = ssl.create_default_context(cafile=str(settings.ca_bundle) if settings.ca_bundle else None)
-    return httpx.AsyncClient(timeout=httpx.Timeout(30, connect=10), verify=verify, follow_redirects=False)
+    limits = httpx.Limits(max_connections=connections, max_keepalive_connections=connections or 20)
+    return httpx.AsyncClient(
+        timeout=httpx.Timeout(30, connect=10), verify=verify, follow_redirects=False, limits=limits
+    )
 
 
 def build(
     settings: Settings, http: httpx.AsyncClient | None = None, sealer: Sealer | None = None
 ) -> tuple[Starlette, ExchangeServer, Provider]:
-    http = http or http_client(settings)
+    if http is None:
+        from exchange_mcp.ews import client as ews_client
+
+        http = http_client(settings)
+        ews_client.isolated = lambda: http_client(settings, connections=1)
     sealer = sealer or make_sealer(settings, http)
     rt = context.Runtime(settings=settings, http=http, sealer=sealer)
     rt.links = Links(settings.public_url, sealer)
@@ -53,7 +60,13 @@ def build(
         adfs = Adfs(settings, http, sealer)
         renew = adfs.renew
 
-    provider = Provider(sealer, public_url=settings.public_url, refresh_ttl=settings.refresh_hours * 3600, renew=renew)
+    provider = Provider(
+        sealer,
+        public_url=settings.public_url,
+        refresh_ttl=settings.refresh_hours * 3600,
+        renew=renew,
+        client_hosts=settings.client_hosts,
+    )
     auth = AuthSettings(
         issuer_url=settings.public_url,
         resource_server_url=f"{settings.public_url}/mcp",

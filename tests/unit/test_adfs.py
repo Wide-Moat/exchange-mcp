@@ -136,15 +136,27 @@ async def test_the_full_adfs_sign_in(ews, key_file):
         },
     )
     rid = parse_qs(urlsplit(auth.headers["location"]).query)["request"][0]
-    to_adfs = await client.get("/signin", params={"request": rid})
+    consent = await client.get("/signin", params={"request": rid})
+    assert (
+        consent.status_code == 200 and "client.example.org" in consent.text and "password" not in consent.text.lower()
+    )
+    assert fake.forms == []  # nothing goes to AD FS before the person agrees on this page
+    to_adfs = await client.post("/signin", data={"request": rid})
     assert to_adfs.status_code == 302
     loc = urlsplit(to_adfs.headers["location"])
     q = parse_qs(loc.query)
     assert f"{loc.scheme}://{loc.netloc}{loc.path}" == f"{ISSUER}/oauth2/authorize/"
     assert q["code_challenge_method"] == ["S256"] and q["redirect_uri"] == [f"{PUBLIC}/adfs/callback"]
-    assert "password" not in (await client.get("/signin", params={"request": rid})).text.lower()
+    cookie = to_adfs.cookies.get("exchange_mcp_signin")
+    assert cookie and "httponly" in to_adfs.headers["set-cookie"].lower()
 
-    back = await client.get("/adfs/callback", params={"code": "adfs-code", "state": q["state"][0]})
+    stranger = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url=PUBLIC)
+    forged = await stranger.get("/adfs/callback", params={"code": "adfs-code", "state": q["state"][0]})
+    assert forged.status_code == 400 and fake.forms == []  # another browser cannot finish this sign-in
+
+    back = await client.get(
+        "/adfs/callback", params={"code": "adfs-code", "state": q["state"][0]}, cookies={"exchange_mcp_signin": cookie}
+    )
     assert back.status_code == 302 and back.headers["location"].startswith("https://client.example.org/cb?code=")
     form = fake.forms[0]
     assert form["grant_type"] == "authorization_code" and form["code_verifier"]

@@ -27,6 +27,7 @@ from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 MAX_BLOB = 16 * 1024  # larger is neither made nor opened
+MAX_PLAIN = 64 * 1024  # an opened blob never expands past this
 KEY_BYTES = 32
 
 
@@ -59,7 +60,11 @@ def _body(kind: str, payload: dict[str, Any], ttl: float, now: float) -> bytes:
 
 def _check(kind: str, raw: bytes, now: float) -> dict[str, Any] | None:
     try:
-        body = json.loads(zlib.decompress(raw))
+        d = zlib.decompressobj()
+        plain = d.decompress(raw, MAX_PLAIN)
+        if d.unconsumed_tail or not d.eof:  # more than MAX_PLAIN, or cut short: not something this server made
+            return None
+        body = json.loads(plain)
     except (zlib.error, ValueError):
         return None
     if not isinstance(body, dict) or body.get("k") != kind:

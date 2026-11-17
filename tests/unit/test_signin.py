@@ -223,3 +223,11 @@ async def test_the_sign_in_page_is_served_in_that_language(ews):
     rid = await f.request_id(cid, _pkce()[1])
     r = await f.client.get("/signin", params={"request": rid}, headers={"Accept-Language": "de-DE,de;q=0.9"})
     assert '<html lang="de">' in r.text and "Kennwort" in r.text and r.headers["content-language"] == "de"
+
+
+async def test_the_page_says_which_application_asks(ews):
+    f = Flow(ews)
+    cid = await f.register()
+    rid = await f.request_id(cid, _pkce()[1])
+    r = await f.client.get("/signin", params={"request": rid})
+    assert "client.example.org" in r.text and "send only what you confirm" in r.text

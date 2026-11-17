@@ -153,7 +153,7 @@ async def test_an_expired_adfs_credential_gets_no_token():
     c = await client(p)
     dead = Credential("adfs", "a@corp.example", "a@corp.example", "A", access_token="t", access_exp=int(now[0]) - 1)
     with pytest.raises(TokenError):
-        await p._issue(c.client_id, dead, [], None)  # noqa: SLF001
+        await p._issue(c.client_id, dead, [], None, started=int(now[0]))  # noqa: SLF001
 
 
 async def test_the_first_sign_in_page_allows_the_client_callback(ews):
@@ -398,3 +398,100 @@ async def test_suggestions_are_only_times_everyone_is_free(rt, ews, invoke):
     )
     assert r.is_error and "refused" in r.text and "ErrorInvalidSuggestionTimeRange" not in r.text
     assert "Excellent" in ews.last("GetUserAvailability").xml()
+
+
+async def test_a_blob_that_would_expand_without_bound_does_not_open():
+    import zlib
+
+    from exchange_mcp.keys import seal as sm
+
+    s = LocalSealer([("k1", os.urandom(32))])
+    nonce = os.urandom(12)
+    bomb = zlib.compress(b'{"k":"client","exp":9999999999,"x":"' + b"a" * 200_000 + b'"}', 9)
+    blob = "k1." + sm.b64(nonce + s._aead["k1"].encrypt(nonce, bomb, sm._aad("client", "k1")))  # noqa: SLF001
+    assert len(blob) < sm.MAX_BLOB and await s.open("client", blob) is None
+
+
+async def test_sign_in_never_takes_a_namesake_for_the_person(rt, ews):
+    """Authenticated as 'al', the directory also has al@other.example (a namesake) and the person's own
+    mailbox under the alias 'al'. Only the alias identifies the mailbox; a local part never does."""
+    from conftest import PASSWORD
+
+    from exchange_mcp.auth.password import check
+
+    def entry(name, addr, alias):
+        a = f"<t:Contact><t:Alias>{alias}</t:Alias></t:Contact>" if alias else ""
+        return (
+            f"<t:Resolution><t:Mailbox><t:Name>{name}</t:Name><t:EmailAddress>{addr}</t:EmailAddress>"
+            f"<t:MailboxType>Mailbox</t:MailboxType></t:Mailbox>{a}</t:Resolution>"
+        )
+
+    namesake_only = ok(
+        "ResolveNames",
+        '<m:ResolutionSet TotalItemsInView="1" IncludesLastItemInRange="true">'
+        + entry("Other Alex", "alex@other.example", "other")
+        + "</m:ResolutionSet>",
+    )
+    ews.on("ResolveNames", namesake_only)
+    with pytest.raises(ExchangeError):
+        await check(rt.http, rt.settings.ews_url, "CORP\\alex", PASSWORD)
+    both = ok(
+        "ResolveNames",
+        '<m:ResolutionSet TotalItemsInView="2" IncludesLastItemInRange="true">'
+        + entry("Alex Mine", "alex.real@corp.example", "alex")
+        + entry("Alex Other", "alex@corp.example", "")
+        + "</m:ResolutionSet>",
+    )
+    ews.on("ResolveNames", both)
+    cred = await check(rt.http, rt.settings.ews_url, "CORP\\alex", PASSWORD)
+    assert cred.address == "alex.real@corp.example"
+
+
+def test_an_ntlm_challenge_is_found_among_others_in_one_header():
+    import base64
+
+    import httpx
+
+    from exchange_mcp.ews.transport import _challenge
+
+    tok = base64.b64encode(b"challenge-bytes").decode()
+    r = httpx.Response(401, headers={"WWW-Authenticate": f"Negotiate, NTLM {tok}"})
+    assert _challenge(r) == b"challenge-bytes"
+
+
+async def test_more_than_twenty_five_attachments_are_refused(rt, ews, invoke):
+    r = await invoke("save_draft", to=["pat@corp.example"], body="x", attach=[f"f{i}.txt" for i in range(26)])
+    assert r.is_error and "At most 25 attachments" in r.text
+    assert ews.writes() == []
+
+
+async def test_a_secondary_address_of_a_list_is_refused(rt, ews, invoke):
+    from test_mail import resolved
+
+    ews.on("ResolveNames", resolved("All Staff", "all@corp.example", "PublicDL"))
+    r = await invoke("save_draft", to=["everyone@corp.example"], body="x")
+    assert r.is_error and "distribution list" in r.text
+    assert ews.writes() == []
+
+
+async def test_suggestions_ask_exchange_for_at_least_thirty_minutes(rt, ews):
+    from datetime import UTC, datetime
+
+    from exchange_mcp.ews.calendar import availability
+    from exchange_mcp.ews.client import Ews
+    from exchange_mcp.ews.transport import Bearer
+
+    ews.on(
+        "GetUserAvailability",
+        envelope("<m:GetUserAvailabilityResponse><m:FreeBusyResponseArray/></m:GetUserAvailabilityResponse>"),
+    )
+    s, e = datetime(2026, 11, 18, 9, tzinfo=UTC), datetime(2026, 11, 18, 18, tzinfo=UTC)
+    await availability(
+        Ews(rt.http, rt.settings.ews_url, Bearer("t")),
+        [("a@corp.example", "Required")],
+        s,
+        e,
+        duration=15,
+        working_hours_only=True,
+    )
+    assert "<t:MeetingDurationInMinutes>30</t:MeetingDurationInMinutes>" in ews.last("GetUserAvailability").xml()

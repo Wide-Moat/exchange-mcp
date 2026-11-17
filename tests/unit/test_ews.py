@@ -258,3 +258,23 @@ async def test_an_oversized_answer_is_not_read_into_memory(monkeypatch):
     with pytest.raises(ExchangeError) as e:
         await Ews(http, EWS_URL, Bearer("t")).call(M.GetAttachment())
     assert e.value.key == "too_large"
+
+
+async def test_ntlm_calls_run_on_a_client_of_their_own(ews, http, monkeypatch):
+    """The shared pool may give a later NTLM leg another connection; an NTLM call gets its own client."""
+    from conftest import PASSWORD
+
+    from exchange_mcp.ews import client as ec
+
+    made: list[httpx.AsyncClient] = []
+
+    def own() -> httpx.AsyncClient:
+        c = httpx.AsyncClient(transport=httpx.MockTransport(ews.handler))
+        made.append(c)
+        return c
+
+    monkeypatch.setattr(ec, "isolated", own)
+    ews.on("GetItem", ok("GetItem"))
+    await Ews(http, EWS_URL, Ntlm("CORP\\alex", PASSWORD)).call(M.GetItem())
+    await Ews(http, EWS_URL, Bearer("t")).call(M.GetItem())
+    assert len(made) == 1 and made[0].is_closed  # one for the NTLM call, closed after it; none for Bearer

@@ -119,3 +119,31 @@ async def test_the_access_token_carries_the_credential_sealed():
     tok = await p.exchange_authorization_code(c, await p.load_authorization_code(c, await code_for(p, c)))
     assert "Sealed-Password-Value-42" not in tok.access_token and "alex@corp.example" not in tok.access_token
     assert (await p.credential_of(tok.access_token)).password == "Sealed-Password-Value-42"
+
+
+async def test_an_operator_can_limit_which_clients_register():
+    import os
+
+    p = Provider(
+        LocalSealer([("k1", os.urandom(32))]),
+        public_url="https://mcp.example.com",
+        refresh_ttl=3600,
+        client_hosts=frozenset({"chat.corp.example"}),
+    )
+    with pytest.raises(RegistrationError):
+        await client(p, "https://evil.example.org/cb")
+    await client(p, "https://chat.corp.example/oauth/callback")
+
+
+async def test_refreshing_does_not_extend_the_session():
+    """A refresh renews the access token; the session still ends at sign-in time plus the refresh lifetime."""
+    p, now = make(refresh_ttl=12 * 3600)
+    c = await client(p)
+    tok = await p.exchange_authorization_code(c, await p.load_authorization_code(c, await code_for(p, c)))
+    for _ in range(11):  # an hour before each expiry, eleven times
+        now[0] += 3600
+        rt = await p.load_refresh_token(c, tok.refresh_token)
+        tok = await p.exchange_refresh_token(c, rt, [])
+    assert tok.expires_in <= 3600
+    now[0] += 3600 + 1  # twelve hours after sign-in
+    assert await p.load_refresh_token(c, tok.refresh_token) is None

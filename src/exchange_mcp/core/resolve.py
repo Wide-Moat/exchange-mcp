@@ -36,19 +36,22 @@ async def candidates(ews: Ews, query: str, *, scope: str = "ActiveDirectoryConta
     from exchange_mcp.ews import people as ep
 
     found = await ep.resolve_names(ews, query, directory_only=scope == "ActiveDirectory")
-    return [
-        Person(
-            name=clean_name(f.name) or "",
-            address=f.address,
-            kind=f.kind,
-            title=clean_name(f.title) or "",
-            department=clean_name(f.department) or "",
-            phone=f.phone,
-            alias=f.alias,
-        )
-        for f in found
-        if f.address
-    ]
+    return ep.partial(
+        [
+            Person(
+                name=clean_name(f.name) or "",
+                address=f.address,
+                kind=f.kind,
+                title=clean_name(f.title) or "",
+                department=clean_name(f.department) or "",
+                phone=f.phone,
+                alias=f.alias,
+            )
+            for f in found
+            if f.address
+        ],
+        getattr(found, "truncated", False),
+    )
 
 
 async def recipient(ews: Ews, query: str) -> Person:
@@ -60,12 +63,20 @@ async def recipient(ews: Ews, query: str) -> Person:
     if ADDRESS.match(q):
         exact = [p for p in found if p.address.lower() == q.lower()]
         if exact:
-            return _no_group(exact[0], q)
+            return _no_group(exact[0])
+        if len(found) == 1:
+            # A secondary address of one entry (a person or a list) resolves to its primary address.
+            return _no_group(found[0])
+        if any(p.kind in GROUPS for p in found):
+            raise invalid("That address belongs to a distribution list. Write to people one by one. Nothing was done.")
         return Person(name="", address=q, kind="OneOff")  # outside the address book: sent as typed
     if not found:
         raise ExchangeError("unresolved", kind="person", query=q)
     exact = [p for p in found if p.name.lower() == q.lower()]
-    pool = exact if len(exact) == 1 else found
+    pool = exact if len(exact) == 1 and not getattr(found, "truncated", False) else found
+    if getattr(found, "truncated", False) and len(pool) <= 1:
+        # Exchange listed only part of the matches: one exact name among them proves nothing.
+        raise ExchangeError("ambiguous", kind="person", query=q, candidates="more than Exchange lists; use the address")
     if len(pool) > 1:
         raise ExchangeError(
             "ambiguous",
@@ -73,10 +84,10 @@ async def recipient(ews: Ews, query: str) -> Person:
             query=q,
             candidates="; ".join(p.short() for p in pool[:MAX_CANDIDATES]),
         )
-    return _no_group(pool[0], q)
+    return _no_group(pool[0])
 
 
-def _no_group(p: Person, q: str) -> Person:
+def _no_group(p: Person) -> Person:
     if p.kind in GROUPS:
         raise invalid(
             f"{p.short()} is a distribution list. Mass mailing is out of scope here: write to people one by one, "

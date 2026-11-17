@@ -259,6 +259,8 @@ async def find_meeting_times(
                 }
                 for x in ok[:MAX_SLOTS]
             ]
+            if len(ok) > MAX_SLOTS:
+                out["slots_truncated"] = True
             if not out["slots"]:
                 out["note"] = "No time in this window suits everyone. Widen the window or drop someone."
         return out
@@ -325,7 +327,7 @@ async def save_event(
                 raise ExchangeError("not_organiser")
             was_s, was_e = _t(existing.start), _t(existing.end)
             if s is not None and e is None:
-                e = s + (was_e - was_s)
+                e = _plus(s, int((was_e - was_s).total_seconds() // 60))  # the same elapsed length
             elif e is not None and s is None:
                 s = was_s
             if duration is not None and s is None:

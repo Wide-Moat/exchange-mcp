@@ -42,8 +42,9 @@ def _peer_certificate(response: httpx.Response) -> bytes | None:
 
 
 def _challenge(response: httpx.Response) -> bytes | None:
-    for value in response.headers.get_list("www-authenticate"):
-        scheme, _, token = value.partition(" ")
+    # One header may hold several challenges ("Negotiate, NTLM <token>"); a base64 token has no comma.
+    for value in response.headers.get_list("www-authenticate", split_commas=True):
+        scheme, _, token = value.strip().partition(" ")
         if scheme.lower() == "ntlm" and token.strip():
             try:
                 return base64.b64decode(token.strip(), validate=True)

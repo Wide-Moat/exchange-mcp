@@ -58,12 +58,14 @@ class Provider:
         public_url: str,
         refresh_ttl: int,
         renew: Callable[[Credential], Awaitable[Credential]] | None = None,
+        client_hosts: frozenset[str] = frozenset(),
         clock: Callable[[], float] = time.time,
     ) -> None:
         self.sealer = sealer
         self.public_url = public_url.rstrip("/")
         self._refresh_ttl = refresh_ttl
         self._renew = renew  # adfs: refresh the AD FS token inside the credential
+        self._client_hosts = client_hosts
         self._clock = clock
         self._used_codes: dict[str, float] = {}
 
@@ -77,6 +79,13 @@ class Provider:
     async def register_client(self, client_info: OAuthClientInformationFull) -> None:
         """The registration becomes the client id: the SDK answers with this same object."""
         for uri in client_info.redirect_uris or []:
+            host = (urlsplit(str(uri)).hostname or "").lower()
+            if self._client_hosts and host not in self._client_hosts:
+                from mcp.server.auth.provider import RegistrationError
+
+                raise RegistrationError(
+                    error="invalid_redirect_uri", error_description="this server accepts only its operator's clients"
+                )
             if not redirect_allowed(str(uri)):
                 from mcp.server.auth.provider import RegistrationError
 
@@ -153,22 +162,38 @@ class Provider:
             raise TokenError(error="invalid_grant", error_description="authorization code damaged")
         if cred.mode == "adfs" and self._renew is not None:
             cred = await self._renew(cred)  # a code can wait five minutes; the AD FS token inside may be near its end
-        return await self._issue(client.client_id, cred, authorization_code.scopes, authorization_code.resource)
+        return await self._issue(
+            client.client_id, cred, authorization_code.scopes, authorization_code.resource, started=int(now)
+        )
 
     # ---------------------------------------------------------------- tokens
-    async def _issue(self, client_id: str, cred: Credential, scopes: list[str], resource: str | None) -> OAuthToken:
-        body = {"client_id": client_id, "scopes": scopes, "resource": resource, "c": cred.to_payload()}
+    async def _issue(
+        self, client_id: str, cred: Credential, scopes: list[str], resource: str | None, *, started: int
+    ) -> OAuthToken:
+        """`started` is the sign-in time and never moves: refreshing renews the access token, not the session.
+        Every refresh token ends when the session ends, the sign-in time plus the refresh lifetime."""
+        session_left = int(started + self._refresh_ttl - self._clock())
+        if session_left <= 0:
+            raise TokenError(error="invalid_grant", error_description="the session has ended; sign in again")
+        body = {
+            "client_id": client_id,
+            "scopes": scopes,
+            "resource": resource,
+            "c": cred.to_payload(),
+            "s0": started,
+        }
         access_ttl = ACCESS_TTL
         if cred.mode == "adfs":
             left = int(cred.access_exp - self._clock())
             if left <= 0:
                 raise TokenError(error="invalid_grant", error_description="the AD FS sign-in has ended; sign in again")
             access_ttl = min(ACCESS_TTL, left)  # never past the AD FS token it carries
+        access_ttl = min(access_ttl, session_left)
         return OAuthToken(
             access_token=await self.sealer.seal("access", body, access_ttl),
             token_type="Bearer",
             expires_in=access_ttl,
-            refresh_token=await self.sealer.seal("refresh", body, self._refresh_ttl),
+            refresh_token=await self.sealer.seal("refresh", body, session_left),
             scope=" ".join(scopes) or None,
         )
 
@@ -193,7 +218,10 @@ class Provider:
         if cred.mode == "adfs" and self._renew is not None:
             cred = await self._renew(cred)  # raises TokenError when AD FS refuses: the person signs in again
         granted = [s for s in (scopes or p["scopes"]) if s in p["scopes"]]
-        return await self._issue(client.client_id, cred, granted, p["resource"])
+        started = p.get("s0")
+        if not isinstance(started, int):  # a token from before the session limit: its own expiry bounds it
+            started = int(p["exp"] - self._refresh_ttl)
+        return await self._issue(client.client_id, cred, granted, p["resource"], started=started)
 
     async def credential_of(self, access_token: str) -> Credential | None:
         p = await self.sealer.open("access", access_token)

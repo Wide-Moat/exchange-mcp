@@ -4,5 +4,9 @@ import json
 import sys
 
 marker = "<!-- exchange-budget -->"
-found = [c for c in json.load(sys.stdin) if c.get("body", "").startswith(marker)]
+found = [
+    c
+    for c in json.load(sys.stdin)
+    if c.get("body", "").startswith(marker) and (c.get("user") or {}).get("login") == "github-actions[bot]"
+]
 print(found[0]["id"] if found else "")

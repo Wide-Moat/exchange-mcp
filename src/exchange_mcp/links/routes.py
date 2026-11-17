@@ -53,7 +53,7 @@ async def download(request: Request) -> Response:
     except ExchangeError as e:
         log.info("download refused: %s", e.key)
         return JSONResponse({"error": "Exchange did not return the attachment. Ask for a new link."}, 502)
-    if len(data) > MAX_ATTACHMENT_BYTES * 2:
+    if len(data) > MAX_ATTACHMENT_BYTES:
         return JSONResponse({"error": "The attachment is too large to pass through."}, 413)
     safe = safe_name(link.get("n") or name)
     ascii_name = "".join(ch if 32 <= ord(ch) < 127 and ch not in '"\\' else "_" for ch in safe)

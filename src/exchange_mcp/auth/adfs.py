@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import hmac
 import json
 import secrets
 import time
@@ -100,10 +101,10 @@ class Adfs:
         return f"{signing_input}.{b64(sig)}"
 
     # ---------------------------------------------------------------- the browser leg
-    async def authorize_url(self, request_id: str) -> str:
+    async def authorize_url(self, request_id: str, browser: str) -> str:
         verifier = secrets.token_urlsafe(48)
         challenge = b64(hashlib.sha256(verifier.encode()).digest())
-        state = await self.sealer.seal("adfs_state", {"r": request_id, "v": verifier}, STATE_TTL)
+        state = await self.sealer.seal("adfs_state", {"r": request_id, "v": verifier, "b": browser}, STATE_TTL)
         query = {
             "response_type": "code",
             "client_id": self.a.client_id,
@@ -125,7 +126,11 @@ class Adfs:
             t = T[lang]
             state = await self.sealer.open("adfs_state", request.query_params.get("state", ""))
             code = request.query_params.get("code", "")
-            if state is None or not code:
+            from exchange_mcp.signin import BROWSER_COOKIE
+
+            browser = request.cookies.get(BROWSER_COOKIE, "")
+            if state is None or not code or not browser or not hmac.compare_digest(browser, state.get("b", "")):
+                # Not the browser that agreed on this server's page: a link someone else started.
                 return _page(lang, heading=t["h1_again"], error=t["expired"], status=400)
             try:
                 tokens = await self._token(
@@ -196,7 +201,8 @@ class Adfs:
             Ews(self.http, self.s.ews_url, probe.auth()), claims.get("email") or login, scope="ActiveDirectory"
         )
         target = (claims.get("email") or login).lower()
-        mine = [p for p in found if p.address.lower() == target] or (found if len(found) == 1 else [])
+        # Only an exact address: a directory search that returns one person has not shown it is this one.
+        mine = [p for p in found if p.address.lower() == target]
         if len(mine) != 1:
             raise ExchangeError("unsupported", reason="Signed in, but Exchange did not identify your mailbox.")
         return mine[0].address, mine[0].name or mine[0].address

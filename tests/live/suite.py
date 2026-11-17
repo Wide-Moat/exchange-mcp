@@ -54,7 +54,7 @@ async def call(s: ClientSession, tool: str, /, **args):
 
 
 async def run(s: ClientSession, to: str) -> None:
-    created: dict[str, list[str]] = {"events": [], "contacts": [], "tasks": [], "folders": [], "mail": []}
+    created: dict[str, list[str]] = {"events": [], "contacts": [], "tasks": [], "folders": [], "mail": [], "drafts": []}
     try:
         await steps(s, to, created)
     finally:
@@ -154,8 +154,10 @@ async def steps(s: ClientSession, to: str, created: dict) -> None:
         not err and fw.get("subject", "").lower().startswith(("fw", "tr", "wg", "пере")),
         f"save_draft forward ({text[:80] if err else ''})",
     )
+    created["drafts"].append(fw["id"])
     err, _, _ = await call(s, "send_draft", id=fw["id"], user_confirmed=True)
     expect(not err, "send_draft sent the forward")
+    created["drafts"].remove(fw["id"])
     err, ra, text = await call(s, "save_draft", mode="reply_all", message=sent_id, body=f"Reply all: {TAG}")
     expect(
         not err and ra.get("subject", "").lower().startswith(("re", "aw", "отв")),
@@ -242,13 +244,21 @@ async def calendar_and_rest(s: ClientSession, to: str, created: dict, tomorrow: 
         return
     night0 = tomorrow.replace(hour=23, minute=0).strftime(fmt)
     night1 = (tomorrow + timedelta(days=1)).replace(hour=1, minute=0).strftime(fmt)
-    err, oof, text = await call(
-        s, "save_automatic_reply", state="scheduled", internal_text=TAG, start=night0, end=night1, user_confirmed=True
-    )
-    expect(not err, f"save_automatic_reply scheduled ({text[:80] if err else ''})")
-    err, conn2, _ = await call(s, "get_connection")
-    expect(conn2.get("automatic_reply") == "scheduled", "get_connection shows it scheduled")
-    err, _, _ = await call(s, "save_automatic_reply", state="off")
+    try:
+        err, oof, text = await call(
+            s,
+            "save_automatic_reply",
+            state="scheduled",
+            internal_text=TAG,
+            start=night0,
+            end=night1,
+            user_confirmed=True,
+        )
+        expect(not err, f"save_automatic_reply scheduled ({text[:80] if err else ''})")
+        err, conn2, _ = await call(s, "get_connection")
+        expect(conn2.get("automatic_reply") == "scheduled", "get_connection shows it scheduled")
+    finally:
+        err, _, _ = await call(s, "save_automatic_reply", state="off")  # whatever happened above
     err2, conn3, _ = await call(s, "get_connection")
     expect(not err and conn3.get("automatic_reply") == "disabled", "and it is off again")
 
@@ -275,17 +285,33 @@ async def contacts_and_tasks(s: ClientSession, created: dict, tomorrow: datetime
 async def cleanup(s: ClientSession, created: dict) -> None:
     """Every test item goes to Deleted Items; any that cannot is a failure of the run."""
     left = []
-    steps = [("cancel_event", {"id": e, "user_confirmed": True}) for e in created["events"]]
+    steps = (
+        [("update_messages", {"ids": created.get("drafts", []), "action": "delete"})] if created.get("drafts") else []
+    )
+    steps += [("cancel_event", {"id": e, "user_confirmed": True}) for e in created["events"]]
     steps += [("delete_contact", {"id": c}) for c in created["contacts"]]
     steps += [("delete_task", {"id": t}) for t in created["tasks"]]
     if created["mail"]:
         steps.append(("update_messages", {"ids": created["mail"], "action": "delete"}))
     steps += [("delete_mail_folder", {"folder": f, "user_confirmed": True}) for f in created["folders"]]
     for name, args in steps:
-        err, _, text = await call(s, name, **args)
-        print(("ok    " if not err else "LEFT  ") + f"cleanup: {name}", flush=True)
+        try:
+            err, _, text = await call(s, name, **args)
+        except Exception as e:  # noqa: BLE001 - one failed step must not leave the rest behind
+            err, text = True, type(e).__name__
+        print(("ok    " if not err else "LEFT  ") + f"cleanup: {name} {text[:60] if err else ''}", flush=True)
         if err:
             left.append(name)
+    try:  # every test letter in Sent Items, including the forward, whose id changes when sent
+        err, page, _ = await call(s, "list_messages", folder="sent", limit=25)
+        stray = [i["id"] for i in page.get("items", []) if TAG in i.get("subject", "")]
+        if stray:
+            err, _, _ = await call(s, "update_messages", ids=stray, action="delete")
+            print(("ok    " if not err else "LEFT  ") + f"cleanup: {len(stray)} test letters", flush=True)
+            if err:
+                left.append("letters")
+    except Exception:  # noqa: BLE001
+        left.append("letters")
     if left:
         print("FAIL  cleanup left items behind:", ", ".join(left), flush=True)
         raise Failed(1)

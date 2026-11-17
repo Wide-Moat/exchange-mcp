@@ -400,10 +400,16 @@ _IMPLIED: dict[str, tuple[set[str], set[str]]] = {
 _HEAD_CONTENT = {"html", "head", "title", "meta", "link", "style", "script", "base", "noscript", "template"}
 
 
+def _strip_comments(css: str) -> str:
+    """CSS comments (an unterminated one runs to the end) separate tokens, so `display:/**/none` reads
+    as `display: none`."""
+    return re.sub(r"/\*.*?(?:\*/|$)", " ", css, flags=re.S)
+
+
 def _decls(style: str) -> dict[str, tuple[str, bool]]:
     """property -> (value, !important), lower-cased."""
     out: dict[str, tuple[str, bool]] = {}
-    for decl in style.split(";"):
+    for decl in _strip_comments(style).split(";"):
         if ":" in decl:
             k, v = decl.split(":", 1)
             v = v.strip().lower()
@@ -479,17 +485,30 @@ def _is_zero(v: str) -> bool:
     return bool(m)
 
 
+_CLIPS = {"hidden", "clip"}
+
+
+def _overflow_axes(s: dict[str, str]) -> tuple[str, str]:
+    """(overflow-x, overflow-y): the shorthand gives one value for both or x then y; longhands win."""
+    words = s.get("overflow", "").split()
+    x = words[0] if words else ""
+    y = words[1] if len(words) > 1 else x
+    return s.get("overflow-x", x), s.get("overflow-y", y)
+
+
 def _hides(s: dict[str, str]) -> bool:
     """Declarations that make an element and everything inside it invisible. (font-size and colour
     can be overridden by a descendant, so they are tracked per element instead.)"""
-    if s.get("display") == "none" or s.get("visibility") in ("hidden", "collapse"):
+    if s.get("display") == "none":
         return True
     if "opacity" in s and _is_zero(s["opacity"]):
         return True
-    for k in ("max-height", "max-width"):
-        if k in s and _is_zero(s[k]):
-            return True
-    return s.get("overflow") == "hidden" and any(k in s and _is_zero(s[k]) for k in ("height", "width"))
+    ox, oy = _overflow_axes(s)
+    clip_x, clip_y = ox in _CLIPS, oy in _CLIPS
+    for size, clipped in (("max-height", clip_y), ("max-width", clip_x), ("height", clip_y), ("width", clip_x)):
+        if size in s and _is_zero(s[size]) and clipped:
+            return True  # a zero box paints its content unless it clips it
+    return False
 
 
 # ---- <style> blocks ------------------------------------------------------------------
@@ -520,6 +539,8 @@ _RELEVANT = {
     "height",
     "width",
     "overflow",
+    "overflow-x",
+    "overflow-y",
     "color",
     "background",
     "background-color",
@@ -683,13 +704,15 @@ class _Styles(HTMLParser):
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         self._in = tag == "style"
         if self._in:
-            self.css.append("")
+            media = next(((v or "") for k, v in attrs if k.lower() == "media"), "")
+            # A block for another medium is collected as empty: it paints nothing on a screen.
+            self.css.append("" if _media_applies("@media " + media) else None)  # type: ignore[arg-type]
 
     def handle_endtag(self, tag: str) -> None:
         self._in = False
 
     def handle_data(self, data: str) -> None:
-        if self._in:
+        if self._in and self.css[-1] is not None:
             self.css[-1] += data
 
 
@@ -697,7 +720,7 @@ def _stylesheet(html: str) -> list[_Rule]:
     p = _Styles()
     p.feed(html)
     p.close()
-    css = re.sub(r"/\*.*?\*/", "", "\n".join(p.css), flags=re.S).replace("<!--", "").replace("-->", "")
+    css = _strip_comments("\n".join(c for c in p.css if c)).replace("<!--", "").replace("-->", "")
     rules: list[_Rule] = []
     _parse_css(css, rules)
     return rules
@@ -712,11 +735,12 @@ class _Frame:
     color: str | None  # effective (inherited) text colour
     bg: str | None  # nearest background painted behind this element
     tiny: bool  # effective font-size is zero
+    invisible: bool = False  # visibility:hidden, inherited, a descendant may set it back to visible
     href: str | None = None
 
     @property
     def text_hidden(self) -> bool:
-        if self.hidden or self.tiny:
+        if self.hidden or self.tiny or self.invisible:
             return True
         if self.color is None:
             return False
@@ -832,8 +856,15 @@ class _ToText(HTMLParser):
         s = self._computed(tag, ident, classes, a.get("style", ""))
         own_hidden = tag in _DROP or "hidden" in a or a.get("aria-hidden", "").lower() == "true" or _hides(s)
         parent = self.stack[-1] if self.stack else None
+        vis = s.get("visibility")
+        if vis in ("hidden", "collapse"):
+            invisible = True
+        elif vis in ("visible", "initial"):
+            invisible = False
+        else:
+            invisible = parent.invisible if parent else False
         if tag in _VOID:
-            if self.hidden or own_hidden or ("font-size" in s and _is_zero(s["font-size"])):
+            if self.hidden or own_hidden or invisible or ("font-size" in s and _is_zero(s["font-size"])):
                 return
             if tag == "img":
                 w, h = a.get("width", ""), a.get("height", "")
@@ -865,6 +896,7 @@ class _ToText(HTMLParser):
             color=color,
             bg=bg,
             tiny=tiny,
+            invisible=invisible,
             href=a.get("href") if tag == "a" else None,
         )
         self.stack.append(frame)
@@ -878,6 +910,10 @@ class _ToText(HTMLParser):
             self.out.append(" | ")
         if tag in ("h1", "h2", "h3"):
             self.out.append("#" * int(tag[1]) + " ")
+
+    def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        # A browser ignores the slash on a non-void element: `<div hidden/>` opens the div.
+        self.handle_starttag(tag, attrs)
 
     def handle_endtag(self, tag: str) -> None:
         if tag in _VOID:

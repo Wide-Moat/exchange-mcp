@@ -251,3 +251,8 @@ Moves a task to Deleted Items. Upstream: `DeleteItem DeleteType=MoveToDeletedIte
 | `password` mode refresh tokens longer than 24 hours | tests/unit/test_config.py::test_password_mode_refresh_is_capped |
 | a password, token or login in a log line or an exception message | tests/unit/test_observability.py::test_a_full_flow_logs_no_content |
 | the sign-in page served without `Cache-Control: no-store`, a CSP, and `frame-ancestors 'none'` | tests/unit/test_signin.py::test_the_sign_in_page_is_not_cached_or_framed |
+| a sign-in page that does not name the application and its address | tests/unit/test_signin.py::test_the_page_says_which_application_asks |
+| an AD FS callback in a browser other than the one that agreed | tests/unit/test_adfs.py::test_the_full_adfs_sign_in |
+| a client registering a redirect host the operator did not list | tests/unit/test_oauth.py::test_an_operator_can_limit_which_clients_register |
+| a refresh that extends the session past sign-in plus the refresh lifetime | tests/unit/test_oauth.py::test_refreshing_does_not_extend_the_session |
+| a mailbox taken as the person's on a matching local part alone | tests/unit/test_review_fixes.py::test_sign_in_never_takes_a_namesake_for_the_person |

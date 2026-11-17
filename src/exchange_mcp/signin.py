@@ -16,7 +16,9 @@ from __future__ import annotations
 
 import html
 import logging
+import secrets
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from starlette.requests import Request
 from starlette.responses import FileResponse, HTMLResponse, RedirectResponse, Response
@@ -32,6 +34,7 @@ log = logging.getLogger("exchange_mcp.signin")
 STATIC = Path(__file__).resolve().parent / "static"
 _STATIC_TYPES = {".woff2": "font/woff2", ".css": "text/css; charset=utf-8", ".txt": "text/plain; charset=utf-8"}
 MAX_PASSWORD = 256
+BROWSER_COOKIE = "exchange_mcp_signin"
 
 
 class SignIn:
@@ -47,20 +50,47 @@ class SignIn:
         p = await self.provider.sign_in_request(rid)
         if p is None:
             return _page(lang, heading=T[lang]["h1_again"], error=T[lang]["expired"], status=410)
+        consent = await self._consent(lang, p)
         if self.adfs is not None:
-            return RedirectResponse(await self.adfs.authorize_url(rid), status_code=302)
-        return _page(lang, form=_form(lang, rid), redirect=_origin(p))
+            # A page of its own, never a silent redirect: with single sign-on, AD FS may not ask anything,
+            # and the person must see which application gets the mailbox before it does.
+            form = (
+                f'{consent}<form method="post" action="/signin"><input type="hidden" name="request" '
+                f'value="{html.escape(rid)}"><button type="submit">{T[lang]["continue"]}</button></form>'
+            )
+            return _page(lang, form=form)
+        return _page(lang, form=consent + _form(lang, rid), redirect=_origin(p))
+
+    async def _consent(self, lang: str, p: dict) -> str:
+        client = await self.provider.get_client(p["client_id"])
+        app = (client.client_name if client and client.client_name else "") or T[lang]["an_app"]
+        host = urlsplit(p["redirect_uri"]).netloc
+        text = T[lang]["consent"].format(app=html.escape(app[:80]), host=html.escape(host[:120]))
+        return f'<p class="lede consent">{text}</p>'
 
     async def submit(self, request: Request) -> Response:
         lang = pick_lang(request.headers.get("accept-language", ""))
         t = T[lang]
-        if self.adfs is not None:
-            return _page(lang, heading=t["h1_again"], error=t["expired"], status=405)
         form = await request.form()
         rid = str(form.get("request", ""))
         p = await self.provider.sign_in_request(rid)
         if p is None:
             return _page(lang, heading=t["h1_again"], error=t["expired"], status=410)
+        if self.adfs is not None:
+            # The person agreed on this page. The browser that agreed is the one that must come back: a
+            # nonce in a cookie here, the same nonce sealed in the AD FS state, compared at the callback.
+            nonce = secrets.token_urlsafe(24)
+            response = RedirectResponse(await self.adfs.authorize_url(rid, nonce), status_code=302)
+            response.set_cookie(
+                BROWSER_COOKIE,
+                nonce,
+                max_age=15 * 60,
+                path="/adfs/callback",
+                secure=urlsplit(runtime().settings.public_url).scheme == "https",
+                httponly=True,
+                samesite="lax",
+            )
+            return response
         typed = str(form.get("login", ""))
         password = str(form.get("password", ""))
         again = _form(lang, rid, typed)
@@ -115,6 +145,9 @@ async def static(request: Request) -> Response:
 
 T: dict[str, dict[str, str]] = {
     "en": {
+        "an_app": "An application",
+        "consent": "<b>{app}</b> at <b>{host}</b> asks for your mailbox: it will read and organise your mail, calendar, contacts and tasks, and send only what you confirm. Sign in only if you started this connection yourself.",
+        "continue": "Continue to sign in",
         "title": "Sign in to Exchange",
         "description": "Sign in to your work mailbox to connect it to your AI app.",
         "h1": "Sign in to your mailbox",
@@ -138,6 +171,9 @@ T: dict[str, dict[str, str]] = {
         ),
     },
     "ru": {
+        "an_app": "Приложение",
+        "consent": "<b>{app}</b> с адресом <b>{host}</b> просит доступ к вашей почте: читать и упорядочивать письма, календарь, контакты и задачи и отправлять только то, что вы подтвердите. Входите, только если подключение начали вы сами.",
+        "continue": "Продолжить вход",
         "title": "Вход в почту Exchange",
         "description": "Войдите в рабочую почту, чтобы подключить её к ИИ-приложению.",
         "h1": "Вход в рабочую почту",
@@ -161,6 +197,9 @@ T: dict[str, dict[str, str]] = {
         ),
     },
     "es": {
+        "an_app": "Una aplicación",
+        "consent": "<b>{app}</b> en <b>{host}</b> solicita acceso a su buzón: leerá y organizará su correo, calendario, contactos y tareas, y solo enviará lo que usted confirme. Inicie sesión solo si usted mismo inició esta conexión.",
+        "continue": "Continuar con el inicio de sesión",
         "title": "Iniciar sesión en Exchange",
         "description": "Inicie sesión en su correo de trabajo para conectarlo a su aplicación de IA.",
         "h1": "Iniciar sesión en el correo",
@@ -184,6 +223,9 @@ T: dict[str, dict[str, str]] = {
         ),
     },
     "de": {
+        "an_app": "Eine Anwendung",
+        "consent": "<b>{app}</b> unter <b>{host}</b> möchte auf Ihr Postfach zugreifen: E-Mails, Kalender, Kontakte und Aufgaben lesen und ordnen und nur senden, was Sie bestätigen. Melden Sie sich nur an, wenn Sie diese Verbindung selbst begonnen haben.",
+        "continue": "Weiter zur Anmeldung",
         "title": "Bei Exchange anmelden",
         "description": "Melden Sie sich bei Ihrem dienstlichen Postfach an, um es mit Ihrer KI-App zu verbinden.",
         "h1": "Am Postfach anmelden",
@@ -209,6 +251,9 @@ T: dict[str, dict[str, str]] = {
         ),
     },
     "fr": {
+        "an_app": "Une application",
+        "consent": "<b>{app}</b> sur <b>{host}</b> demande l'accès à votre messagerie : il lira et organisera vos messages, agenda, contacts et tâches, et n'enverra que ce que vous confirmez. Ne vous connectez que si vous avez vous-même lancé cette connexion.",
+        "continue": "Continuer la connexion",
         "title": "Connexion à Exchange",
         "description": "Connectez-vous à votre messagerie professionnelle pour la relier à votre application d'IA.",
         "h1": "Connexion à la messagerie",

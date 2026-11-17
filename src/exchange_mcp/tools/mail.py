@@ -22,6 +22,7 @@ from exchange_mcp.registry import tool
 
 MAX_IDS = 25
 MAX_ATTACHMENTS = 25
+MAX_LISTED = 25
 MAX_CATEGORIES = 25
 UNDO_DELETE = "list_messages folder=deleted, then update_messages action=move"
 CHECKS_FAILED = "Exchange did not answer the recipient checks; the draft is saved."
@@ -132,7 +133,8 @@ async def list_messages(
             if since:
                 terms.append(f"received>={parse(since, tz).date().isoformat()}")
             if until:
-                terms.append(f"received<{parse(until, tz).date().isoformat()}")
+                # AQS compares days: up to and including the day of `until`; the exact time is applied below.
+                terms.append(f"received<={parse(until, tz).date().isoformat()}")
             if has_attachments:
                 terms.append("hasattachment:true")
             aqs = " ".join(terms)
@@ -178,8 +180,10 @@ async def get_message(
         out: dict[str, Any] = {
             "id": m.id,
             "from": compact({"name": name(m.sender.get("name")), "address": m.sender.get("address")}),
-            "to": [compact({"name": name(r.get("name")), "address": r.get("address")}) for r in m.to],
-            "cc": [compact({"name": name(r.get("name")), "address": r.get("address")}) for r in m.cc],
+            "to": [compact({"name": name(r.get("name")), "address": r.get("address")}) for r in m.to[:MAX_LISTED]],
+            "cc": [compact({"name": name(r.get("name")), "address": r.get("address")}) for r in m.cc[:MAX_LISTED]],
+            "to_total": len(m.to) if len(m.to) > MAX_LISTED else None,
+            "cc_total": len(m.cc) if len(m.cc) > MAX_LISTED else None,
             "received": local(m.received or m.sent, tz),
             "subject": content_block("the sender (subject)", m.subject) if m.subject else None,
             "unread": m.unread,
@@ -357,17 +361,19 @@ async def save_draft(
     sends, after they agree. HTML is cleaned of anything active and checked for Outlook; the preview lists
     what was changed and Exchange's warnings (external recipients, automatic replies, size)."""
     async with call("save_draft") as c:
-        to_l, cc_l, bcc_l = await _addresses(c, to), await _addresses(c, cc), await _addresses(c, bcc)
-        if len(to_l) + len(cc_l) + len(bcc_l) > MAX_RECIPIENTS:
-            raise ExchangeError(
-                "too_many", limit=MAX_RECIPIENTS, what="recipients", count=len(to_l) + len(cc_l) + len(bcc_l)
-            )
+        if len(attach or []) > MAX_ATTACHMENTS:
+            raise ExchangeError("too_many", limit=MAX_ATTACHMENTS, what="attachments", count=len(attach or []))
         for f in attach or []:
             if not _FILE_NAME.match(f) or f.startswith((".", "-", "~")) or f in (".", ".."):
                 raise invalid(
                     "attach takes bare file names in the sandbox's current folder, not paths or options. "
                     "Nothing was saved."
                 )
+        to_l, cc_l, bcc_l = await _addresses(c, to), await _addresses(c, cc), await _addresses(c, bcc)
+        if len(to_l) + len(cc_l) + len(bcc_l) > MAX_RECIPIENTS:
+            raise ExchangeError(
+                "too_many", limit=MAX_RECIPIENTS, what="recipients", count=len(to_l) + len(cc_l) + len(bcc_l)
+            )
         report: dict[str, Any] = {}
         html_body = None
         if body is not None:
@@ -451,14 +457,17 @@ async def save_draft(
         my_domain = c.me.rsplit("@", 1)[-1].lower()
         external = sorted({a for a in recipients if a.rsplit("@", 1)[-1].lower() != my_domain})
         preview_text = html_to_text(saved.html)
+        attached = sum(1 for a in saved.attachments if not a.inline)
         out: dict[str, Any] = {
             "id": did,
             "to": [r["address"] for r in saved.to],
             "cc": [r["address"] for r in saved.cc],
             "bcc": [r["address"] for r in saved.bcc] or None,
             "subject": saved.subject,
-            "preview": preview_text[:500] + ("…" if len(preview_text) > 500 else ""),
-            "attachments": [a.name for a in saved.attachments if not a.inline],
+            "preview": preview_text[:500],
+            "preview_truncated": len(preview_text) > 500,
+            "attachments": [a.name for a in saved.attachments if not a.inline][:MAX_ATTACHMENTS],
+            "attachments_total": attached if attached > MAX_ATTACHMENTS else None,
             "html": report or None,
             "external_recipients": external or None,
             "recipients_with_automatic_reply": tips.get("automatic_replies") or None,
