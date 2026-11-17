@@ -34,11 +34,21 @@ def test_the_named_files_are_allowed(tmp_path):
 def test_a_weak_or_open_key_file_stops_the_server(tmp_path):
     f = tmp_path / "key"
     f.write_text(key_line())
-    f.chmod(0o440)
-    with pytest.raises(ConfigError, match="group or others"):
+    f.chmod(0o404)
+    with pytest.raises(ConfigError, match="readable by others"):
         read_key_file(f)
     f.chmod(0o400)
     assert len(read_key_file(f)) == 1
+    f.chmod(0o440)  # the pod's own fsGroup, as Kubernetes mounts a Secret for a non-root pod
+    assert len(read_key_file(f)) == 1
+    import os as _os
+
+    foreign = next(g for g in range(60000, 61000) if g not in {_os.getgid(), *_os.getgroups()})
+    st = f.stat()
+    fake = _os.stat_result((st.st_mode, *st[1:5], foreign, *st[6:]))
+    from exchange_mcp.keys.providers import exposed
+
+    assert exposed(fake)  # group-readable by a group this process is not in
     short = tmp_path / "short"
     short.write_text("k1:" + "A" * 20)
     short.chmod(0o400)

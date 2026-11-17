@@ -21,14 +21,25 @@ from exchange_mcp.keys.seal import KEY_BYTES, LocalSealer, Sealer, VaultSealer, 
 from exchange_mcp.keys.vault import Transit
 
 
+def exposed(st: os.stat_result) -> bool:
+    """Readable by anyone outside this process's own user and groups. Kubernetes mounts a Secret for a
+    non-root pod as root:<fsGroup> 0440, so the pod's own group may read it; nobody else may."""
+    mode = stat.S_IMODE(st.st_mode)
+    if mode & stat.S_IRWXO:
+        return True
+    return bool(mode & stat.S_IRWXG) and st.st_gid not in {os.getgid(), *os.getgroups()}
+
+
 def read_key_file(path: Path) -> list[tuple[str, bytes]]:
     try:
         st = path.stat()
     except OSError:
         raise ConfigError("the key file cannot be read") from None
-    # Kubernetes mounts Secret files through a symlink; the mode that matters is the target's.
-    if stat.S_IMODE(st.st_mode) & (stat.S_IRWXG | stat.S_IRWXO):
-        raise ConfigError("the key file is readable by group or others; mount it with defaultMode 0400")
+    if exposed(st):
+        raise ConfigError(
+            "the key file is readable by others or by a group this server is not in; mount it 0400, or 0440 "
+            "with the pod's fsGroup"
+        )
     keys: list[tuple[str, bytes]] = []
     for n, line in enumerate(path.read_text().splitlines(), 1):
         line = line.strip()

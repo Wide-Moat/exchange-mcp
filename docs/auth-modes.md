@@ -83,7 +83,7 @@ Rules, enforced at start:
   in the Deployment. A key in the environment stops the server.
 - **Never typed by a person, never committed, never in CI variables.** The chart generates it; no
   human sees it.
-- **A key file** must be at least 32 bytes and readable by its owner only.
+- **A key file** must be at least 32 bytes and readable only by this server's user and its own group (0400, or 0440 with the pod's fsGroup).
 - **Rotation** is a new key id. Tokens sealed under a key id the server no longer holds answer 401;
   clients re-authorise, the person signs in once.
 - **Generating a new key on every deploy** is allowed; everyone then signs in again after each

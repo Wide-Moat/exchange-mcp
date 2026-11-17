@@ -177,9 +177,13 @@ class _Busy(Exception):
 
 
 def _backoff(el: etree._Element) -> float:
+    """EWS says how long to wait as <t:Value Name="BackOffMilliseconds">n</t:Value> inside MessageXml."""
     for node in el.iter():
-        if etree.QName(node).localname == "BackOffMilliseconds" and (node.text or "").isdigit():
-            return int(node.text) / 1000
+        if not isinstance(node.tag, str):
+            continue
+        named = etree.QName(node).localname == "Value" and node.get("Name") == "BackOffMilliseconds"
+        if (named or etree.QName(node).localname == "BackOffMilliseconds") and (node.text or "").strip().isdigit():
+            return int(node.text.strip()) / 1000
     return 1.0
 
 

@@ -235,7 +235,7 @@ Moves a task to Deleted Items. Upstream: `DeleteItem DeleteType=MoveToDeletedIte
 | Must refuse | Test |
 |---|---|
 | key material given in the environment | tests/unit/test_keys.py::test_a_key_in_the_environment_stops_the_server |
-| a key file readable by group or others, or shorter than 32 bytes | tests/unit/test_keys.py::test_a_weak_or_open_key_file_stops_the_server |
+| a key file readable by others or by a foreign group, or shorter than 32 bytes | tests/unit/test_keys.py::test_a_weak_or_open_key_file_stops_the_server |
 | an altered token, or a token of another kind | tests/unit/test_oauth.py::test_an_altered_token_is_refused |
 | a token sealed under a key id no longer held | tests/unit/test_oauth.py::test_a_token_of_a_retired_key_is_refused |
 | an expired access or refresh token | tests/unit/test_oauth.py::test_tokens_expire |

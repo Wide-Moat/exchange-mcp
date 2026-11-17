@@ -1,0 +1,65 @@
+# Publish the image from main, then scan exactly what was pushed.
+name: publish
+
+on:
+  push:
+    branches: [main]
+    # No paths filter: a commit that changes only a workflow still needs its image built.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  image:
+    permissions:
+      contents: read
+      packages: write
+    uses: Wide-Moat/ci/.github/workflows/image-build.yml@main
+    with:
+      runner: ${{ vars.CI_BUILD_RUNNER || vars.CI_RUNNER || 'ubuntu-latest' }}
+      image: ghcr.io/wide-moat/exchange-mcp
+      push: true
+
+  trivy:
+    needs: image
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    permissions:
+      contents: read
+      packages: read
+    env:
+      TRIVY_VERSION: 0.73.0
+      IMAGE: ghcr.io/wide-moat/exchange-mcp@${{ needs.image.outputs.digest }}
+    steps:
+      - name: install the pinned trivy
+        run: |
+          set -uo pipefail
+          url="https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          curl -fsSL --retry 3 -o /tmp/trivy.tar.gz "$url"
+          size=$(wc -c < /tmp/trivy.tar.gz)
+          [ "$size" -gt 10000000 ] || { echo "archive is only ${size} bytes"; exit 1; }
+          tar -xzf /tmp/trivy.tar.gz -C /tmp trivy && chmod +x /tmp/trivy
+          /tmp/trivy --version | head -1 | grep -q "$TRIVY_VERSION"
+      - name: no HIGH or CRITICAL vulnerability with a fix in the pushed image
+        env:
+          TRIVY_USERNAME: ${{ github.actor }}
+          TRIVY_PASSWORD: ${{ github.token }}
+        run: |
+          set -uo pipefail
+          /tmp/trivy image --no-progress --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed \
+            --format json -o /tmp/scan.json "$IMAGE"
+          python3 - <<'PY'
+          import json, sys
+          d = json.load(open("/tmp/scan.json"))
+          results = d.get("Results") or []
+          packages = sum(len(r.get("Packages") or []) for r in results) if results else 0
+          vulns = [v for r in results for v in (r.get("Vulnerabilities") or [])]
+          print(f"{len(results)} targets scanned, {len(vulns)} fixable HIGH/CRITICAL")
+          if not results:
+              print("trivy scanned nothing: the image did not load"); sys.exit(2)
+          for v in vulns:
+              print(v["VulnerabilityID"], v.get("PkgName"), v.get("InstalledVersion"), "->", v.get("FixedVersion"))
+          sys.exit(1 if vulns else 0)
+          PY
+      - name: what an installation should pin
+        run: echo "$IMAGE"
