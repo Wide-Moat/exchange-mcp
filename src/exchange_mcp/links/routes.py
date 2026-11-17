@@ -110,7 +110,12 @@ async def _store(link: dict, cred: Credential, data: bytes) -> Response:
             # The draft is the record, so this holds across replicas: a file of this name is already there.
             if any(a.name == name and not a.inline for a in draft.attachments):
                 return JSONResponse(
-                    {"attached": name, "already": True, "next": "It is already on the draft; nothing was added."}
+                    {
+                        "attached": name,
+                        "already": True,
+                        "next": "A file of this name is already on the draft; nothing was added. If this is a "
+                        "different file, rename it and ask save_draft for a new link.",
+                    }
                 )
             ctype = mimetypes.guess_type(name)[0] or "application/octet-stream"
             await em.add_attachment(ews, draft.id, name, ctype, data)

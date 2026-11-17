@@ -101,6 +101,7 @@ async def _listing(addresses: _Addresses, m: em.Listing, tz, folder: str | None,
             "from": _name(m.sender.get("name")) or await addresses.of(m.sender, m.sender_smtp),
             "from_address": await addresses.of(m.sender, m.sender_smtp),
             "to": names[:TO_SHOWN],
+            "to_truncated": len(names) > TO_SHOWN,
             "to_total": len(names) if len(names) > TO_SHOWN else None,
             "subject": content_block("the sender (subject)", m.subject) if m.subject else None,
             "preview": preview,
@@ -138,10 +139,9 @@ async def _sender_search(c, sender: str) -> tuple[str, str | None, str | None]:
 
 async def _from_matches(addresses: _Addresses, m: em.Listing, address: str, owner_name: str | None) -> bool:
     shown = await addresses.of(m.sender, m.sender_smtp)
-    if shown:
-        return shown.lower() == address
-    # The DN could not be turned into an address: the name the search was made by decides.
-    return bool(owner_name) and (m.sender.get("name") or "").strip().lower() == owner_name.lower()
+    # Only a confirmed address counts: a matching name alone could be a namesake, so a sender Exchange
+    # cannot turn into an address is left out rather than guessed in.
+    return bool(shown) and shown.lower() == address
 
 
 async def _previews(c, found: list[em.Listing]) -> tuple[dict[str, str], bool]:
