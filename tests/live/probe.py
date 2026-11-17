@@ -15,8 +15,8 @@ import hashlib
 import json
 import os
 import secrets
-import subprocess
 import sys
+import webbrowser
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from threading import Thread
 from urllib.parse import parse_qs, urlencode, urlsplit
@@ -51,7 +51,12 @@ def catch_code(port: int) -> dict:
 
     class H(BaseHTTPRequestHandler):
         def do_GET(self):  # noqa: N802
-            got.update({k: v[0] for k, v in parse_qs(urlsplit(self.path).query).items()})
+            u = urlsplit(self.path)
+            if u.path != "/callback":
+                self.send_response(404)
+                self.end_headers()
+                return
+            got.update({k: v[0] for k, v in parse_qs(u.query).items()})
             self.send_response(200)
             self.end_headers()
             self.wfile.write(b"Connected. You can close this tab.")
@@ -60,7 +65,12 @@ def catch_code(port: int) -> dict:
             pass
 
     srv = HTTPServer(("127.0.0.1", port), H)
-    Thread(target=srv.handle_request, daemon=True).start()
+
+    def serve() -> None:
+        while not got:
+            srv.handle_request()
+
+    Thread(target=serve, daemon=True).start()
     return got
 
 
@@ -70,6 +80,8 @@ TOKEN_FILE = os.environ.get("PROBE_TOKEN_FILE")  # optional: reuse one sign-in a
 async def main(base: str) -> None:
     if TOKEN_FILE and os.path.exists(TOKEN_FILE):
         saved = json.loads(open(TOKEN_FILE).read())
+        if saved.get("base") not in (None, base):
+            sys.exit("the saved sign-in belongs to another server; remove PROBE_TOKEN_FILE or point at that server")
         if "client_id" not in saved:  # saved before refresh support: use the access token while it lives
             await probe(base, saved)
             return
@@ -83,7 +95,7 @@ async def main(base: str) -> None:
                 },
             )
         if r.status_code == 200:
-            tok = {**r.json(), "client_id": saved["client_id"]}
+            tok = {**r.json(), "client_id": saved["client_id"], "base": base}
             save(tok)
             await probe(base, tok)
             return
@@ -116,7 +128,8 @@ async def main(base: str) -> None:
                 "code_challenge_method": "S256",
             }
         )
-        subprocess.run(["open", url], check=False)  # noqa: S603, S607
+        if not webbrowser.open(url):
+            print("open this address in a browser:", url, flush=True)
         print("sign-in page opened in the browser; waiting...", flush=True)
         for _ in range(600):
             if got:
@@ -138,6 +151,7 @@ async def main(base: str) -> None:
         ).json()
     print("token:", sorted(tok), "expires_in", tok.get("expires_in"))
     tok["client_id"] = cid
+    tok["base"] = base
     save(tok)
     await probe(base, tok)
 
@@ -145,6 +159,7 @@ async def main(base: str) -> None:
 def save(tok: dict) -> None:
     if TOKEN_FILE:
         fd = os.open(TOKEN_FILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        os.fchmod(fd, 0o600)  # also when the file existed with wider rights
         with os.fdopen(fd, "w") as f:
             f.write(json.dumps(tok))
 
