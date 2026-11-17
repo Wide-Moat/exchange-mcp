@@ -184,3 +184,30 @@ def test_credentials_never_print():
 
 def test_t_namespace_used_for_mailbox_builders():
     assert T.Mailbox is not None and inspect.isclass(type(T))
+
+
+async def test_ntlm_never_leaves_an_authenticated_connection_or_a_body_on_a_handshake_leg():
+    """NTLM authenticates a connection. The pool is shared by everyone, so the handshake legs carry no body
+    and the authenticated request closes its connection; a server that does not challenge is refused."""
+    import spnego
+
+    legs: list[tuple[str, bytes, str]] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        legs.append((req.headers.get("authorization", "")[:5], req.content, req.headers.get("connection", "")))
+        return httpx.Response(200, content=ok("GetItem"))  # as if the connection were already authenticated
+
+    http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    with pytest.raises(ExchangeError):
+        await Ews(http, EWS_URL, Ntlm("CORP\\alex", "pw")).call(M.DeleteItem())
+    assert [(a, body) for a, body, _ in legs] == [("", b"")]  # one empty probe; the delete never travelled
+    assert spnego is not None
+
+
+async def test_ntlm_final_leg_closes_its_connection(ews, http):
+    from conftest import PASSWORD
+
+    ews.on("GetItem", ok("GetItem"))
+    await Ews(http, EWS_URL, Ntlm("CORP\\alex", PASSWORD)).call(M.GetItem())
+    sent = ews.last("GetItem")
+    assert sent.headers["connection"] == "close" and sent.headers["authorization"].startswith("NTLM ")

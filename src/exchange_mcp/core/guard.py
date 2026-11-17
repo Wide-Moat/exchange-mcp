@@ -76,3 +76,8 @@ class Guard:
         if recipients > MAX_RECIPIENTS:
             raise ExchangeError("too_many", limit=MAX_RECIPIENTS, what="recipients", count=recipients)
         return {"sends_left": self._take(person, kind)}
+
+    def spend(self, person: str, *, kind: str) -> dict:
+        """An action others see that needs no confirmation (answering one's own invitation): no word asked,
+        but it still draws on the same allowance."""
+        return {"sends_left": self._take(person, kind)}

@@ -8,6 +8,71 @@ from zoneinfo import ZoneInfo
 
 from exchange_mcp.core.errors import invalid
 
+# The person's IANA zone as the Windows zone name Exchange keeps a recurring meeting in. Without it a
+# recurring series is anchored to UTC and moves by an hour across daylight-saving changes.
+WINDOWS_ZONES = {
+    "UTC": "UTC",
+    "Etc/UTC": "UTC",
+    "Europe/London": "GMT Standard Time",
+    "Europe/Dublin": "GMT Standard Time",
+    "Europe/Lisbon": "GMT Standard Time",
+    "Europe/Berlin": "W. Europe Standard Time",
+    "Europe/Amsterdam": "W. Europe Standard Time",
+    "Europe/Rome": "W. Europe Standard Time",
+    "Europe/Vienna": "W. Europe Standard Time",
+    "Europe/Zurich": "W. Europe Standard Time",
+    "Europe/Paris": "Romance Standard Time",
+    "Europe/Madrid": "Romance Standard Time",
+    "Europe/Brussels": "Romance Standard Time",
+    "Europe/Prague": "Central Europe Standard Time",
+    "Europe/Budapest": "Central Europe Standard Time",
+    "Europe/Warsaw": "Central European Standard Time",
+    "Europe/Kiev": "FLE Standard Time",
+    "Europe/Kyiv": "FLE Standard Time",
+    "Europe/Helsinki": "FLE Standard Time",
+    "Europe/Riga": "FLE Standard Time",
+    "Europe/Vilnius": "FLE Standard Time",
+    "Europe/Tallinn": "FLE Standard Time",
+    "Europe/Athens": "GTB Standard Time",
+    "Europe/Bucharest": "GTB Standard Time",
+    "Europe/Istanbul": "Turkey Standard Time",
+    "Europe/Minsk": "Belarus Standard Time",
+    "Europe/Moscow": "Russian Standard Time",
+    "Europe/Kaliningrad": "Kaliningrad Standard Time",
+    "Europe/Samara": "Russia Time Zone 3",
+    "Asia/Yekaterinburg": "Ekaterinburg Standard Time",
+    "Asia/Omsk": "Omsk Standard Time",
+    "Asia/Novosibirsk": "N. Central Asia Standard Time",
+    "Asia/Krasnoyarsk": "North Asia Standard Time",
+    "Asia/Irkutsk": "North Asia East Standard Time",
+    "Asia/Yakutsk": "Yakutsk Standard Time",
+    "Asia/Vladivostok": "Vladivostok Standard Time",
+    "Asia/Magadan": "Magadan Standard Time",
+    "Asia/Kamchatka": "Russia Time Zone 11",
+    "Asia/Almaty": "Central Asia Standard Time",
+    "Asia/Tashkent": "West Asia Standard Time",
+    "Asia/Tbilisi": "Georgian Standard Time",
+    "Asia/Yerevan": "Caucasus Standard Time",
+    "Asia/Baku": "Azerbaijan Standard Time",
+    "Asia/Dubai": "Arabian Standard Time",
+    "Asia/Jerusalem": "Israel Standard Time",
+    "Asia/Kolkata": "India Standard Time",
+    "Asia/Shanghai": "China Standard Time",
+    "Asia/Tokyo": "Tokyo Standard Time",
+    "Asia/Singapore": "Singapore Standard Time",
+    "Australia/Sydney": "AUS Eastern Standard Time",
+    "America/New_York": "Eastern Standard Time",
+    "America/Chicago": "Central Standard Time",
+    "America/Denver": "Mountain Standard Time",
+    "America/Los_Angeles": "Pacific Standard Time",
+    "America/Sao_Paulo": "E. South America Standard Time",
+}
+
+
+def windows_zone(iana: str) -> str | None:
+    return WINDOWS_ZONES.get(iana)
+
+
 _LOCAL = re.compile(r"^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2})(?::(\d{2}))?)?\s*(Z|[+-]\d{2}:?\d{2})?$")
 
 

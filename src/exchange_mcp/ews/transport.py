@@ -19,6 +19,8 @@ from cryptography import x509
 from cryptography.hazmat.primitives import hashes
 from spnego.channel_bindings import GssChannelBindings
 
+from exchange_mcp.core.errors import ExchangeError
+
 
 def _end_point_hash(der: bytes) -> bytes:
     """RFC 5929: the certificate's own signature hash, with MD5 and SHA-1 replaced by SHA-256."""
@@ -61,12 +63,16 @@ class Ntlm(httpx.Auth):
         return "Ntlm(<redacted>)"
 
     def auth_flow(self, request: httpx.Request) -> Generator[httpx.Request, httpx.Response, None]:
-        # Leg 0, anonymous: Exchange answers 401 and the TLS handshake shows its certificate, which the
-        # channel binding needs before the negotiate message is made (the message integrity code covers
-        # every leg of one context, so the context cannot change after the first message).
-        response = yield request
+        """NTLM authenticates a TCP connection, not a request, and the HTTP client pools connections across
+        people. So: the two handshake legs carry no body (nothing can execute on a connection someone else
+        authenticated), and the one request that carries the body and the credential also carries
+        `Connection: close`, so no authenticated connection ever goes back to the pool."""
+        # Leg 0, anonymous and empty: Exchange answers 401, and the TLS handshake shows its certificate,
+        # which the channel binding needs before the negotiate message is made (the message integrity code
+        # covers every leg of one context, so the context cannot change after the first message).
+        response = yield self._empty(request)
         if response.status_code != 401:
-            return
+            raise ExchangeError("failed", code="NtlmNotChallenged", ref="ntlm")
         cert = _peer_certificate(response)
         bindings = (
             GssChannelBindings(application_data=b"tls-server-end-point:" + _end_point_hash(cert)) if cert else None
@@ -79,15 +85,21 @@ class Ntlm(httpx.Auth):
             protocol="ntlm",
             channel_bindings=bindings,
         )
-        request.headers["Authorization"] = "NTLM " + base64.b64encode(ctx.step() or b"").decode()
-        response = yield request
-        if response.status_code != 401:
-            return
-        challenge = _challenge(response)
+        negotiate = self._empty(request)
+        negotiate.headers["Authorization"] = "NTLM " + base64.b64encode(ctx.step() or b"").decode()
+        response = yield negotiate
+        challenge = _challenge(response) if response.status_code == 401 else None
         if challenge is None:
-            return
+            raise ExchangeError("failed", code="NtlmNoChallenge", ref="ntlm")
         request.headers["Authorization"] = "NTLM " + base64.b64encode(ctx.step(challenge) or b"").decode()
+        request.headers["Connection"] = "close"
         yield request
+
+    @staticmethod
+    def _empty(request: httpx.Request) -> httpx.Request:
+        headers = {k: v for k, v in request.headers.items() if k.lower() not in ("content-length", "authorization")}
+        headers["Content-Length"] = "0"
+        return httpx.Request("POST", request.url, headers=headers)
 
 
 class Bearer(httpx.Auth):

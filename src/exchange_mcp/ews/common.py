@@ -31,6 +31,10 @@ DRAFT_PROPERTY_SET = "6e1f8a43-3c0b-4f5e-9d61-2b7a0c5e9f12"
 DRAFT_PROPERTY_NAME = "ExchangeMcpDraft"
 
 
+def _children(el):
+    return [] if el is None else list(el)
+
+
 def draft_marker_uri() -> etree._Element:
     return T.ExtendedFieldURI(PropertySetId=DRAFT_PROPERTY_SET, PropertyName=DRAFT_PROPERTY_NAME, PropertyType="String")
 
@@ -65,7 +69,7 @@ def page_of(message: etree._Element, container_path: str, offset: int, limit: in
     root = find(message, "m:RootFolder")
     total = int(root.get("TotalItemsInView", "0")) if root is not None else 0
     last = (root.get("IncludesLastItemInRange", "true") == "true") if root is not None else True
-    els = list(find(root, container_path) or [])
+    els = _children(find(root, container_path))
     nxt = None if last or not els else offset + len(els)
     return Page(els, total, nxt)
 

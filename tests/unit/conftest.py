@@ -15,6 +15,7 @@ from typing import Any
 
 import httpx
 import pytest
+import spnego
 from lxml import etree
 
 from exchange_mcp.auth.credential import Credential
@@ -70,6 +71,8 @@ Handler = Callable[[Seen], Any]
 class FakeEws:
     routes: dict[str, list[Any]] = field(default_factory=dict)
     seen: list[Seen] = field(default_factory=list)
+    handshakes: int = 0
+    _ntlm: Any = None
 
     def on(self, operation: str, *responses: Any) -> FakeEws:
         """Answer `operation` with these responses in order; the last one repeats. A response is bytes, an
@@ -78,12 +81,35 @@ class FakeEws:
         return self
 
     def handler(self, request: httpx.Request) -> httpx.Response:
+        """Exchange behind IIS with Windows authentication: NTLM legs are answered by a real NTLM acceptor
+        (pyspnego) that checks the password; a bearer token is passed through to the operation."""
+        if str(request.url) != EWS_URL:
+            return httpx.Response(599, content=b"wrong host")
+        auth = request.headers.get("authorization", "")
+        if not request.content:  # an NTLM handshake leg carries no body
+            if not auth:
+                self.handshakes += 1
+                return httpx.Response(401, headers={"WWW-Authenticate": "NTLM"})
+            self._ntlm = spnego.server(protocol="ntlm")
+            out = self._ntlm.step(base64.b64decode(auth.split(" ", 1)[1]))
+            return httpx.Response(401, headers={"WWW-Authenticate": "NTLM " + base64.b64encode(out).decode()})
+        if auth.startswith("NTLM "):
+            try:
+                self._ntlm.step(base64.b64decode(auth.split(" ", 1)[1]))
+                ok = self._ntlm.complete
+            except Exception:  # noqa: BLE001 - a wrong password is a failed acceptor step
+                ok = False
+            self._ntlm = None
+            if not ok:
+                return httpx.Response(401)
+            if request.headers.get("connection", "").lower() != "close":
+                raise AssertionError("an NTLM-authenticated request must close its connection")
+        elif not auth.startswith("Bearer "):
+            return httpx.Response(401, headers={"WWW-Authenticate": "NTLM"})
         root = parse(request.content)
         op = operation_name(root.find(q("s", "Body"))[0])
         seen = Seen(op, root, dict(request.headers), str(request.url))
         self.seen.append(seen)
-        if str(request.url) != EWS_URL:
-            return httpx.Response(599, content=b"wrong host")
         queue = self.routes.get(op)
         if not queue:
             raise AssertionError(f"unexpected EWS operation {op}")
@@ -98,8 +124,8 @@ class FakeEws:
         return [s.operation for s in self.seen]
 
     def attempts(self) -> int:
-        """Separate calls, not handshake legs: NTLM sends an anonymous leg first, without Authorization."""
-        return sum(1 for s in self.seen if "authorization" not in {k.lower() for k in s.headers})
+        """Separate password checks: each starts with one anonymous, empty NTLM leg."""
+        return self.handshakes
 
     def writes(self) -> list[str]:
         return [o for o in self.ops() if o in WRITES]
@@ -129,6 +155,17 @@ def base_env(**extra: str) -> dict[str, str]:
     return env
 
 
+PASSWORD = "pw-not-in-logs-1"
+
+
+@pytest.fixture(autouse=True)
+def ntlm_users(tmp_path_factory, monkeypatch):
+    """The directory the fake's NTLM acceptor checks passwords against."""
+    users = tmp_path_factory.mktemp("ntlm") / "users"
+    users.write_text(f":alex@corp.example:{PASSWORD}\nCORP:alex:{PASSWORD}\n")
+    monkeypatch.setenv("NTLM_USER_FILE", str(users))
+
+
 @pytest.fixture
 def ews() -> FakeEws:
     return FakeEws()
@@ -151,7 +188,7 @@ def http(ews: FakeEws) -> httpx.AsyncClient:
 
 @pytest.fixture
 def cred() -> Credential:
-    return Credential("password", "alex@corp.example", ME, "Alex Example", password="pw-not-in-logs-1")
+    return Credential("password", "alex@corp.example", ME, "Alex Example", password=PASSWORD)
 
 
 @pytest.fixture

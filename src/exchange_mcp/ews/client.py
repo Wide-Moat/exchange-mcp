@@ -65,6 +65,10 @@ BUSY_RETRIES = 2
 BUSY_MAX_WAIT = 5.0
 
 
+def _children(el):
+    return [] if el is None else list(el)
+
+
 @dataclass
 class Sent:
     """What one request carried, for the tests that inspect every request (never logged)."""
@@ -212,7 +216,7 @@ def _error(code: str, ref: str) -> ExchangeError:
 
 
 def items(message: etree._Element, container: str = "m:Items") -> list[etree._Element]:
-    return list(find(message, container) or [])
+    return _children(find(message, container))
 
 
 def root_folder(message: etree._Element) -> etree._Element | None:

@@ -112,7 +112,7 @@ async def test_a_full_sign_in_issues_tokens_that_carry_the_person(ews):
     rid = await f.request_id(cid, challenge)
     page = await f.client.get("/signin", params={"request": rid})
     assert page.status_code == 200 and 'name="password"' in page.text
-    r = await f.submit(rid, "CORP\\alex", "right")
+    r = await f.submit(rid, "CORP\\alex", "pw-not-in-logs-1")
     assert r.status_code == 302
     q = parse_qs(urlsplit(r.headers["location"]).query)
     assert q["state"] == ["st"]
@@ -149,7 +149,7 @@ async def test_unknown_and_wrong_look_the_same(ews):
     assert wrong.status_code == other_domain.status_code == empty.status_code == 400
     assert message(wrong) == message(other_domain) == message(empty)
     assert ews.attempts() == 1  # the other domain and the empty password never reached Exchange
-    assert set(ews.ops()) == {"ResolveNames"}
+    assert ews.ops() == []  # the wrong password failed the NTLM handshake: no operation ran
 
 
 async def test_the_page_limits_attempts_before_exchange(ews):
