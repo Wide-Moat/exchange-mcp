@@ -1,0 +1,39 @@
+# Security
+
+## Reporting
+
+Report a vulnerability through GitHub's private form (Security → Report a vulnerability), never in
+a public issue. Say what an attacker can do, against which version or commit, and how to reproduce
+it.
+
+What counts: anything that lets a model, a message or the sign-in page act beyond the one
+signed-in person; open a credential from a token without the key; reach a host other than the
+configured Exchange and AD FS; send without the two-step send; or get a password, a token or mail
+content into a log.
+
+## What this server holds
+
+Nothing at rest. Credentials travel inside the OAuth tokens it issues, sealed with AES-GCM under
+one key ([`docs/auth-modes.md`](docs/auth-modes.md)). There is no database and no session store.
+
+| Mode | Credential inside the tokens | Read |
+|---|---|---|
+| `adfs` (preferred) | an AD FS refresh token for EWS | [auth-modes](docs/auth-modes.md#how-each-mode-works) |
+| `password` | the person's directory password | [risks of `password`](docs/auth-modes.md#the-risks-of-password-and-what-holds-each) |
+
+## Deployment requirements
+
+| Requirement | Why |
+|---|---|
+| Sealing key from `vault` (recommended) or `file` generated at deploy; never an environment variable | the key is what turns a stolen token into a credential |
+| Secret readable only by this server's ServiceAccount; etcd encryption at rest | a key in a readable Secret or an unencrypted etcd backup is a key in the open |
+| No `kubectl exec` into the pod for people; non-root, read-only root filesystem, no added capabilities | code in the pod sees the credentials of people using it |
+| TLS to Exchange and AD FS verified against the operator's CA bundle | the password or the AD FS token is on that wire |
+| Automatic forwarding to external domains off in Exchange (`Set-RemoteDomain Default -AutoForwardEnabled $false`) | the persistence an attacker would want after taking over a mailbox; this server cannot create rules, but the mailbox's owner can |
+| Sign-in attempt limit below the directory's lockout threshold | the sign-in page must not become a way to lock accounts |
+
+## By design, not here
+
+Inbox rules, forwarding, delegates, permissions, other mailboxes, impersonation, export,
+synchronisation, push subscriptions, public folders, hard delete. See the
+[manifesto](MANIFESTO.md), rule 28.
