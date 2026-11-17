@@ -210,3 +210,37 @@ def test_css_comments_are_removed_before_parsing():
     assert html_to_text('<div style="display:/**/none">x</div>ok') == "ok"
     assert html_to_text("<style>.x{display:/*a*/none}</style><p class=x>x</p>ok") == "ok"
     assert html_to_text("<style>.x{/*a;b*/display:none}</style><p class=x>x</p>ok") == "ok"
+
+
+def test_overflow_longhand_and_shorthand_follow_declaration_order():
+    assert html_to_text('<div style="overflow-x:visible;overflow:hidden;width:0">gone</div>') == ""
+    assert html_to_text('<div style="overflow:hidden;overflow-x:visible;width:0">Seen</div>') == "Seen"
+    assert (
+        html_to_text('<div style="overflow-x:visible;overflow:hidden;overflow-x:visible;width:0">Seen</div>') == "Seen"
+    )
+    assert html_to_text('<div style="overflow-x:visible !important;overflow:hidden;width:0">Seen</div>') == "Seen"
+    css = "<style>.a{overflow:hidden}.b{overflow-x:visible}</style>"
+    assert html_to_text(css + '<div class="a b" style="width:0">Seen</div>') == "Seen"
+    assert html_to_text(css + '<div class="a" style="width:0">gone</div>') == ""
+
+
+def test_overflow_auto_and_scroll_clip_a_zero_box():
+    assert html_to_text('<div style="max-height:0; overflow:auto">x</div>') == ""
+    assert html_to_text('<div style="max-height:0; overflow:scroll">x</div>') == ""
+    assert html_to_text('<div style="width:0; overflow-x:auto">x</div>') == ""
+
+
+def test_unterminated_comment_ends_with_its_style_element():
+    html = "<style>/* unfinished</style><style>.secret{display:none}</style>"
+    assert html_to_text(html + '<div class="secret">hidden</div>ok') == "ok"
+
+
+def test_media_queries_not_only_and_lists():
+    rule = '<style media="{m}">.x{{display:none}}</style><p class=x>t</p>ok'
+    for m in ("not print", "only screen", "not speech", "print, screen", "print, not speech"):
+        assert html_to_text(rule.format(m=m)) == "ok", m
+    for m in ("not screen", "not all", "print", "print, speech", "only print", "screen and (min-width:1px), print"):
+        assert html_to_text(rule.format(m=m)) == "t\nok", m
+    block = "<style>@media {m}{{.x{{display:none}}}}</style><p class=x>t</p>ok"
+    assert html_to_text(block.format(m="not print")) == "ok"
+    assert html_to_text(block.format(m="not screen")) == "t\nok"

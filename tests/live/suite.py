@@ -304,6 +304,8 @@ async def cleanup(s: ClientSession, created: dict) -> None:
             left.append(name)
     try:  # every test letter in Sent Items, including the forward, whose id changes when sent
         err, page, _ = await call(s, "list_messages", folder="sent", limit=25)
+        if err:
+            raise RuntimeError("Sent Items could not be listed")
         stray = [i["id"] for i in page.get("items", []) if TAG in i.get("subject", "")]
         if stray:
             err, _, _ = await call(s, "update_messages", ids=stray, action="delete")

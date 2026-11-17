@@ -327,7 +327,7 @@ async def save_event(
                 raise ExchangeError("not_organiser")
             was_s, was_e = _t(existing.start), _t(existing.end)
             if s is not None and e is None:
-                e = _plus(s, int((was_e - was_s).total_seconds() // 60))  # the same elapsed length
+                e = (s.astimezone(UTC) + (was_e - was_s)).astimezone(s.tzinfo)  # the same elapsed length
             elif e is not None and s is None:
                 s = was_s
             if duration is not None and s is None:

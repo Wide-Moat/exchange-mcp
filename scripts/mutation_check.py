@@ -469,11 +469,35 @@ MUTATIONS = [
         "signin.py",
         [
             (
-                "        return _page(lang, form=consent + _form(lang, rid), redirect=_origin(p))",
-                "        return _page(lang, form=_form(lang, rid), redirect=_origin(p))",
+                "        page = _page(lang, form=consent + _form(lang, rid, token=token), redirect=_origin(p))",
+                "        page = _page(lang, form=_form(lang, rid, token=token), redirect=_origin(p))",
             )
         ],
         "tests/unit/test_signin.py",
+    ),
+    (
+        "the sign-in form must come from this site's page",
+        "signin.py",
+        [
+            (
+                "        if not _same_origin(request) or not token or not hmac.compare_digest(token, "
+                'str(form.get("form", ""))):',
+                "        if False:",
+            )
+        ],
+        "tests/unit/test_signin.py",
+    ),
+    (
+        "a cross-site post is refused even with a token",
+        "signin.py",
+        [('        return origin.rstrip("/") == runtime().settings.public_url', "        return True")],
+        "tests/unit/test_signin.py",
+    ),
+    (
+        "the session starts at sign-in",
+        "oauth/provider.py",
+        [('            started=int(p.get("s0", now)),', "            started=int(now),")],
+        "tests/unit/test_oauth.py",
     ),
 ]
 

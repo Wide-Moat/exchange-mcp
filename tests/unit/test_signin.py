@@ -108,8 +108,12 @@ class Flow:
         assert r.status_code == 302, r.text
         return parse_qs(urlsplit(r.headers["location"]).query)["request"][0]
 
-    async def submit(self, rid: str, login: str, password: str) -> httpx.Response:
-        return await self.client.post("/signin", data={"request": rid, "login": login, "password": password})
+    async def submit(self, rid: str, login: str, password: str, **headers: str) -> httpx.Response:
+        """As a browser does: open the page (its form carries a token, its cookie the same), then post."""
+        page = await self.client.get("/signin", params={"request": rid})
+        token = re.search(r'name="form" value="([^"]+)"', page.text).group(1)
+        data = {"request": rid, "login": login, "password": password, "form": token}
+        return await self.client.post("/signin", data=data, headers=headers)
 
 
 async def test_a_full_sign_in_issues_tokens_that_carry_the_person(ews):
@@ -231,3 +235,16 @@ async def test_the_page_says_which_application_asks(ews):
     rid = await f.request_id(cid, _pkce()[1])
     r = await f.client.get("/signin", params={"request": rid})
     assert "client.example.org" in r.text and "send only what you confirm" in r.text
+
+
+async def test_a_form_posted_from_another_site_is_refused(ews):
+    """The page's token and its cookie must match, and the browser must say the post came from this site."""
+    ews.on("ResolveNames", RESOLVED)
+    f = Flow(ews)
+    cid = await f.register()
+    rid = await f.request_id(cid, _pkce()[1])
+    cross = await f.submit(rid, "alex", "pw-not-in-logs-1", origin="https://evil.example.org")
+    assert cross.status_code == 403
+    blind = await f.client.post("/signin", data={"request": rid, "login": "alex", "password": "x", "form": "guess"})
+    assert blind.status_code == 403
+    assert ews.attempts() == 0  # neither reached Exchange

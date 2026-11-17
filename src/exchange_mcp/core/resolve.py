@@ -64,7 +64,7 @@ async def recipient(ews: Ews, query: str) -> Person:
         exact = [p for p in found if p.address.lower() == q.lower()]
         if exact:
             return _no_group(exact[0])
-        if len(found) == 1:
+        if len(found) == 1 and not getattr(found, "truncated", False):
             # A secondary address of one entry (a person or a list) resolves to its primary address.
             return _no_group(found[0])
         if any(p.kind in GROUPS for p in found):

@@ -14,6 +14,7 @@ Content-Security-Policy says so to the browser. It is never cached and never fra
 
 from __future__ import annotations
 
+import hmac
 import html
 import logging
 import secrets
@@ -35,6 +36,7 @@ STATIC = Path(__file__).resolve().parent / "static"
 _STATIC_TYPES = {".woff2": "font/woff2", ".css": "text/css; charset=utf-8", ".txt": "text/plain; charset=utf-8"}
 MAX_PASSWORD = 256
 BROWSER_COOKIE = "exchange_mcp_signin"
+FORM_COOKIE = "exchange_mcp_form"
 
 
 class SignIn:
@@ -51,15 +53,18 @@ class SignIn:
         if p is None:
             return _page(lang, heading=T[lang]["h1_again"], error=T[lang]["expired"], status=410)
         consent = await self._consent(lang, p)
+        token = secrets.token_urlsafe(24)
         if self.adfs is not None:
             # A page of its own, never a silent redirect: with single sign-on, AD FS may not ask anything,
             # and the person must see which application gets the mailbox before it does.
             form = (
                 f'{consent}<form method="post" action="/signin"><input type="hidden" name="request" '
-                f'value="{html.escape(rid)}"><button type="submit">{T[lang]["continue"]}</button></form>'
+                f'value="{html.escape(rid)}">{_token_input(token)}'
+                f'<button type="submit">{T[lang]["continue"]}</button></form>'
             )
-            return _page(lang, form=form)
-        return _page(lang, form=consent + _form(lang, rid), redirect=_origin(p))
+            return _with_form_cookie(_page(lang, form=form), token)
+        page = _page(lang, form=consent + _form(lang, rid, token=token), redirect=_origin(p))
+        return _with_form_cookie(page, token)
 
     async def _consent(self, lang: str, p: dict) -> str:
         client = await self.provider.get_client(p["client_id"])
@@ -76,6 +81,11 @@ class SignIn:
         p = await self.provider.sign_in_request(rid)
         if p is None:
             return _page(lang, heading=t["h1_again"], error=t["expired"], status=410)
+        token = request.cookies.get(FORM_COOKIE, "")
+        if not _same_origin(request) or not token or not hmac.compare_digest(token, str(form.get("form", ""))):
+            # Posted from another site, or without the page this server showed: the person did not agree here.
+            log.info("sign-in refused: form not from this page")
+            return _page(lang, heading=t["h1_again"], error=t["expired"], status=403)
         if self.adfs is not None:
             # The person agreed on this page. The browser that agreed is the one that must come back: a
             # nonce in a cookie here, the same nonce sealed in the AD FS state, compared at the callback.
@@ -93,7 +103,7 @@ class SignIn:
             return response
         typed = str(form.get("login", ""))
         password = str(form.get("password", ""))
-        again = _form(lang, rid, typed)
+        again = await self._consent(lang, p) + _form(lang, rid, typed, token=token)
         s = runtime().settings
         try:
             login = normalise(typed, s.login_format, s.login_domain, s.login_also)
@@ -304,12 +314,38 @@ def pick_lang(accept: str) -> str:
 # ---------------------------------------------------------------- HTML
 
 
-def _form(lang: str, rid: str, login: str = "") -> str:
+def _token_input(token: str) -> str:
+    return f'<input type="hidden" name="form" value="{html.escape(token)}">'
+
+
+def _with_form_cookie(response: Response, token: str) -> Response:
+    """The form's token, also in a cookie only this site's pages send back (double submit)."""
+    response.set_cookie(
+        FORM_COOKIE,
+        token,
+        max_age=15 * 60,
+        path="/signin",
+        secure=urlsplit(runtime().settings.public_url).scheme == "https",
+        httponly=True,
+        samesite="strict",
+    )
+    return response
+
+
+def _same_origin(request: Request) -> bool:
+    """A browser names where a POST comes from; a form on another site is refused."""
+    origin = request.headers.get("origin")
+    if origin is not None:
+        return origin.rstrip("/") == runtime().settings.public_url
+    return request.headers.get("sec-fetch-site", "same-origin") in ("same-origin", "none")
+
+
+def _form(lang: str, rid: str, login: str = "", *, token: str = "") -> str:
     t = T[lang]
     return f"""
   <p class="lede">{t["lede"]}</p>
   <form method="post" action="/signin" novalidate>
-    <input type="hidden" name="request" value="{html.escape(rid)}">
+    <input type="hidden" name="request" value="{html.escape(rid)}">{_token_input(token)}
     <label for="login">{t["login"]}</label>
     <input id="login" name="login" value="{html.escape(login)}" autocomplete="username" spellcheck="false"
            autocapitalize="off" aria-describedby="login-hint" required autofocus>

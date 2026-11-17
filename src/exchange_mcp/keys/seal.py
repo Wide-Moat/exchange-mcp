@@ -55,7 +55,10 @@ class Sealer(Protocol):
 def _body(kind: str, payload: dict[str, Any], ttl: float, now: float) -> bytes:
     if "k" in payload or "exp" in payload:
         raise ValueError("payload keys 'k' and 'exp' are reserved")
-    return zlib.compress(json.dumps({**payload, "k": kind, "exp": int(now + ttl)}, separators=(",", ":")).encode(), 9)
+    plain = json.dumps({**payload, "k": kind, "exp": int(now + ttl)}, separators=(",", ":")).encode()
+    if len(plain) > MAX_PLAIN:  # open() refuses more; never hand out what it would refuse
+        raise TooLarge(len(plain))
+    return zlib.compress(plain, 9)
 
 
 def _check(kind: str, raw: bytes, now: float) -> dict[str, Any] | None:

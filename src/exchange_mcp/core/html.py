@@ -417,6 +417,7 @@ def _decls(style: str) -> dict[str, tuple[str, bool]]:
             k = k.strip().lower()
             if k in out and out[k][1] and not important:
                 continue  # an earlier !important beats a later normal declaration
+            out.pop(k, None)  # a repeated property moves to its latest position: order is the cascade
             out[k] = (re.sub(r"!\s*important", "", v).strip(), important)
     return out
 
@@ -485,15 +486,14 @@ def _is_zero(v: str) -> bool:
     return bool(m)
 
 
-_CLIPS = {"hidden", "clip"}
+_CLIPS = {"hidden", "clip", "auto", "scroll"}
 
 
-def _overflow_axes(s: dict[str, str]) -> tuple[str, str]:
-    """(overflow-x, overflow-y): the shorthand gives one value for both or x then y; longhands win."""
-    words = s.get("overflow", "").split()
+def _overflow_shorthand(value: str) -> tuple[str, str]:
+    """The shorthand gives one value for both axes, or x then y."""
+    words = value.split()
     x = words[0] if words else ""
-    y = words[1] if len(words) > 1 else x
-    return s.get("overflow-x", x), s.get("overflow-y", y)
+    return x, (words[1] if len(words) > 1 else x)
 
 
 def _hides(s: dict[str, str]) -> bool:
@@ -503,7 +503,7 @@ def _hides(s: dict[str, str]) -> bool:
         return True
     if "opacity" in s and _is_zero(s["opacity"]):
         return True
-    ox, oy = _overflow_axes(s)
+    ox, oy = s.get("overflow-x", ""), s.get("overflow-y", "")  # resolved per axis by _computed
     clip_x, clip_y = ox in _CLIPS, oy in _CLIPS
     for size, clipped in (("max-height", clip_y), ("max-width", clip_x), ("height", clip_y), ("width", clip_x)):
         if size in s and _is_zero(s[size]) and clipped:
@@ -657,8 +657,18 @@ def _media_applies(prelude: str) -> bool:
     if not query:
         return True
     for part in query.split(","):
-        words = [w for w in part.split() if w != "only"]
-        if "(" not in part and "not" not in words and words in (["all"], ["screen"]):
+        if "(" in part:
+            continue  # a feature condition depends on the screen: not evaluated, never applied
+        words = part.split()
+        if words and words[0] == "only":
+            words = words[1:]
+        negated = bool(words) and words[0] == "not"
+        if negated:
+            words = words[1:]
+        if len(words) != 1:
+            continue
+        on_screen = words[0] in ("all", "screen")
+        if on_screen != negated:
             return True
     return False
 
@@ -720,7 +730,7 @@ def _stylesheet(html: str) -> list[_Rule]:
     p = _Styles()
     p.feed(html)
     p.close()
-    css = _strip_comments("\n".join(c for c in p.css if c)).replace("<!--", "").replace("-->", "")
+    css = "\n".join(_strip_comments(c) for c in p.css if c).replace("<!--", "").replace("-->", "")
     rules: list[_Rule] = []
     _parse_css(css, rules)
     return rules
@@ -801,6 +811,10 @@ class _ToText(HTMLParser):
         entries.extend(((imp, 1, (0, 0, 0), 0), k, v) for k, (v, imp) in _decls(style).items())
         out: dict[str, str] = {}
         for _, k, v in sorted(entries, key=lambda e: e[0]):
+            if k == "overflow":  # shorthand and longhands cascade per axis, in order
+                out["overflow-x"], out["overflow-y"] = _overflow_shorthand(v)
+            elif k in ("overflow-x", "overflow-y"):
+                v = v.split()[0] if v.split() else ""
             out[k] = v
             if k == "background":
                 out["background-color"] = _bg_color(v)

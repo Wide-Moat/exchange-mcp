@@ -147,3 +147,23 @@ async def test_refreshing_does_not_extend_the_session():
     assert tok.expires_in <= 3600
     now[0] += 3600 + 1  # twelve hours after sign-in
     assert await p.load_refresh_token(c, tok.refresh_token) is None
+
+
+async def test_the_session_starts_at_sign_in_not_at_redemption():
+    p, now = make(refresh_ttl=12 * 3600)
+    c = await client(p)
+    code = await code_for(p, c)
+    now[0] += 290  # the client redeems the code almost five minutes later
+    tok = await p.exchange_authorization_code(c, await p.load_authorization_code(c, code))
+    now[0] += 12 * 3600 - 290 + 1  # twelve hours after the sign-in itself
+    assert await p.load_refresh_token(c, tok.refresh_token) is None
+
+
+async def test_a_payload_too_large_to_open_is_not_sealed():
+    import os
+
+    from exchange_mcp.keys.seal import TooLarge
+
+    s = LocalSealer([("k1", os.urandom(32))])
+    with pytest.raises(TooLarge):
+        await s.seal("client", {"x": "a" * 70_000}, 60)

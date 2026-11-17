@@ -141,7 +141,10 @@ async def test_the_full_adfs_sign_in(ews, key_file):
         consent.status_code == 200 and "client.example.org" in consent.text and "password" not in consent.text.lower()
     )
     assert fake.forms == []  # nothing goes to AD FS before the person agrees on this page
-    to_adfs = await client.post("/signin", data={"request": rid})
+    import re
+
+    token = re.search(r'name="form" value="([^"]+)"', consent.text).group(1)
+    to_adfs = await client.post("/signin", data={"request": rid, "form": token})
     assert to_adfs.status_code == 302
     loc = urlsplit(to_adfs.headers["location"])
     q = parse_qs(loc.query)

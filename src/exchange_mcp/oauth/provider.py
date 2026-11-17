@@ -122,7 +122,8 @@ class Provider:
         if p is None:
             raise LookupError("sign-in request unknown or expired")
         p.pop("exp", None)
-        code = await self.sealer.seal("code", {**p, "c": credential.to_payload()}, CODE_TTL)
+        signed_in = int(self._clock())
+        code = await self.sealer.seal("code", {**p, "c": credential.to_payload(), "s0": signed_in}, CODE_TTL)
         return construct_redirect_uri(p["redirect_uri"], code=code, state=p["state"])
 
     # ---------------------------------------------------------------- codes
@@ -163,7 +164,11 @@ class Provider:
         if cred.mode == "adfs" and self._renew is not None:
             cred = await self._renew(cred)  # a code can wait five minutes; the AD FS token inside may be near its end
         return await self._issue(
-            client.client_id, cred, authorization_code.scopes, authorization_code.resource, started=int(now)
+            client.client_id,
+            cred,
+            authorization_code.scopes,
+            authorization_code.resource,
+            started=int(p.get("s0", now)),  # the sign-in, not the redemption: a code can wait five minutes
         )
 
     # ---------------------------------------------------------------- tokens
