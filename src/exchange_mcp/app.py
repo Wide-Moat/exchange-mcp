@@ -20,6 +20,8 @@ from exchange_mcp.config import Settings
 from exchange_mcp.core import context
 from exchange_mcp.keys.providers import make_sealer
 from exchange_mcp.keys.seal import Sealer
+from exchange_mcp.links import routes as link_routes
+from exchange_mcp.links.links import Links
 from exchange_mcp.oauth.provider import Provider
 from exchange_mcp.server import ExchangeServer
 from exchange_mcp.signin import AuthorizeErrorPage, SignIn, static
@@ -39,6 +41,7 @@ def build(
     http = http or http_client(settings)
     sealer = sealer or make_sealer(settings, http)
     rt = context.Runtime(settings=settings, http=http, sealer=sealer)
+    rt.links = Links(settings.public_url, sealer)
     context.install(rt)
 
     adfs = None
@@ -63,6 +66,8 @@ def build(
     server.custom_route("/signin", methods=["GET"])(signin.page)
     server.custom_route("/signin", methods=["POST"])(signin.submit)
     server.custom_route("/static/{path:path}", methods=["GET"])(static)
+    server.custom_route("/files/d/{lid}", methods=["GET"])(link_routes.download)
+    server.custom_route("/files/u/{lid}", methods=["PUT", "POST"])(link_routes.upload)
     if adfs is not None:
         server.custom_route("/adfs/callback", methods=["GET"])(adfs.callback_route(provider))
 

@@ -156,7 +156,10 @@ def cred() -> Credential:
 
 @pytest.fixture
 def rt(settings, http, sealer, cred):
+    from exchange_mcp.links.links import Links
+
     runtime = context.Runtime(settings=settings, http=http, sealer=sealer)
+    runtime.links = Links(PUBLIC, sealer)
     context.install(runtime)
     token = context.credential_override.set(cred)
     yield runtime
