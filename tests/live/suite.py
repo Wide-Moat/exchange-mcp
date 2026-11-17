@@ -104,6 +104,7 @@ async def steps(s: ClientSession, to: str, created: dict) -> None:
         if item:
             break
     expect(item is not None, "the letter is in Sent Items")
+    created["mail"].append(item["id"])
     err, msg, _ = await call(s, "get_message", id=item["id"], include_thread=True)
     expect(not err and msg.get("body", "").startswith("<<<content "), "get_message marks the body as data")
     files = [a for a in msg.get("attachments", []) if a.get("name") == "live.txt"]
@@ -141,10 +142,11 @@ async def steps(s: ClientSession, to: str, created: dict) -> None:
     created["folders"] = [TAG + " renamed"]
     err, mv, _ = await call(s, "update_messages", ids=[item["id"]], action="move", folder=TAG + " renamed")
     expect(not err and len(mv.get("ids", [])) == 1, "update_messages moved the letter and returned its new id")
+    created["mail"] = list(mv["ids"])
     err, back, _ = await call(s, "update_messages", ids=mv["ids"], action="move", folder="sent")
     expect(not err and len(back.get("ids", [])) == 1, "and moved it back")
     sent_id = back["ids"][0]
-    created["mail"].append(sent_id)
+    created["mail"] = [sent_id]
 
     # ------------------------------------------------ forward and reply-all keep the thread
     err, fw, text = await call(s, "save_draft", mode="forward", message=sent_id, to=[to], body=f"Forward: {TAG}")
@@ -193,7 +195,7 @@ async def calendar_and_rest(s: ClientSession, to: str, created: dict, tomorrow: 
     expect(not err and rep.get("id"), f"save_event with a weekly repeat ({text[:80] if err else ''})")
     created["events"].append(rep["id"])
     err, rev, _ = await call(s, "get_event", id=rep["id"], include_body=False)
-    words = str(rev.get("recurrence", "")).lower()
+    words = str(rev.get("repeats", "")).lower()
     expect(not err and "week" in words and "3" in words, "get_event reads back a weekly repeat of three")
     err, refused, refused_text = await call(
         s,
@@ -233,8 +235,9 @@ async def calendar_and_rest(s: ClientSession, to: str, created: dict, tomorrow: 
     # ------------------------------------------------ automatic reply: scheduled tomorrow night, then off
     # Only when none is set: turning it off keeps the saved texts, so a reply the person has would change.
     err, conn1, _ = await call(s, "get_connection")
-    if conn1.get("automatic_reply") != "disabled":
-        print("skip  automatic reply: the person has one set; it is left untouched", flush=True)
+    # Opt-in: even when off, the saved reply texts and audience would be replaced by the test's.
+    if conn1.get("automatic_reply") != "disabled" or os.environ.get("SUITE_AUTOMATIC_REPLY") != "1":
+        print("skip  automatic reply (set SUITE_AUTOMATIC_REPLY=1; it replaces the saved reply texts)", flush=True)
         await contacts_and_tasks(s, created, tomorrow)
         return
     night0 = tomorrow.replace(hour=23, minute=0).strftime(fmt)
