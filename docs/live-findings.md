@@ -10,6 +10,7 @@ answers in the measured shape. No host, address or person of the installation go
 | `FindFolder` deep traversal; `CalendarView`; `GetRoomLists` | 2016 CU23 | accepted | tests/unit/test_calendar.py, test_people.py |
 | `save_draft` → `send_draft` to an external address | 2016 CU23 | draft marked as ours, external recipient flagged, `"yes"` refused, sent once, a second send of the same draft refused, newest item in Sent Items | tests/unit/test_mail.py::test_send_draft_sends_the_saved_draft_once |
 | AQS search for a message sent seconds ago | 2016 CU23 | not found yet: the search index lags by minutes; newest-first listing finds it | (live probe reads Sent Items without a query) |
+| `GetUserAvailability` with a UTC zone whose two rules are the same transition | 2016 CU23 | fault "The specified time zone isn't valid"; two distinct zero-bias transitions work | tests/unit/test_calendar.py::test_the_utc_zone_has_two_distinct_transitions |
 | `FindItem` on tasks with a restriction on `task:Status` | 2016 CU23 | `ErrorInvalidValueForProperty`; `task:IsComplete` works instead | tests/unit/test_tasks.py::test_list_tasks_filters_open_tasks |
 
 ## Verify on the first live run

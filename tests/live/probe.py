@@ -79,14 +79,14 @@ EXTERNAL = "--external" in sys.argv
 TOKEN_FILE = os.environ.get("PROBE_TOKEN_FILE")  # optional: reuse one sign-in across runs (0600)
 
 
-async def main(base: str) -> None:
+async def signed_in(base: str) -> dict:
+    """A token for `base`: the saved one refreshed, or a new browser sign-in."""
     if TOKEN_FILE and os.path.exists(TOKEN_FILE):
         saved = json.loads(open(TOKEN_FILE).read())
         if saved.get("base") not in (None, base):
             sys.exit("the saved sign-in belongs to another server; remove PROBE_TOKEN_FILE or point at that server")
-        if "client_id" not in saved:  # saved before refresh support: use the access token while it lives
-            await probe(base, saved)
-            return
+        if "client_id" not in saved:  # an old file that cannot be refreshed: sign in again
+            saved = {"client_id": "", "refresh_token": ""}
         async with httpx.AsyncClient(base_url=base) as h:  # a fresh access token from the refresh token
             r = await h.post(
                 "/token",
@@ -99,8 +99,7 @@ async def main(base: str) -> None:
         if r.status_code == 200:
             tok = {**r.json(), "client_id": saved["client_id"], "base": base}
             save(tok)
-            await probe(base, tok)
-            return
+            return tok
         print("the saved sign-in has ended; signing in again", flush=True)
     port = 33418
     redirect = f"http://127.0.0.1:{port}/callback"
@@ -133,7 +132,7 @@ async def main(base: str) -> None:
         if not webbrowser.open(url):
             print("open this address in a browser:", url, flush=True)
         print("sign-in page opened in the browser; waiting...", flush=True)
-        for _ in range(600):
+        for _ in range(int(os.environ.get("PROBE_WAIT_SECONDS", "300")) * 2):
             if got:
                 break
             await asyncio.sleep(0.5)
@@ -155,7 +154,11 @@ async def main(base: str) -> None:
     tok["client_id"] = cid
     tok["base"] = base
     save(tok)
-    await probe(base, tok)
+    return tok
+
+
+async def main(base: str) -> None:
+    await probe(base, await signed_in(base))
 
 
 def save(tok: dict) -> None:

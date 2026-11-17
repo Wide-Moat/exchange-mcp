@@ -408,3 +408,13 @@ def rt_cred_auth(rt):
     from exchange_mcp.ews.transport import Bearer
 
     return Bearer("t")
+
+
+def test_the_utc_zone_has_two_distinct_transitions():
+    """Live: Exchange 2016 refuses a SerializableTimeZone whose standard and daylight rules are the same."""
+    from exchange_mcp.ews.calendar import _utc_zone
+
+    z = _utc_zone()
+    std, dst = z.find("{*}StandardTime"), z.find("{*}DaylightTime")
+    assert std.find("{*}Month").text != dst.find("{*}Month").text
+    assert {e.text for e in z.iter("{*}Bias")} == {"0"}

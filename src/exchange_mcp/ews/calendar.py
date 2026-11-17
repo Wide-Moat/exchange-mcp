@@ -432,12 +432,16 @@ async def send_meeting_response(ews: Ews, response: etree._Element, *, send: boo
 
 
 def _utc_zone() -> etree._Element:
-    """SerializableTimeZone for UTC: request and answer times are then plain UTC."""
+    """SerializableTimeZone for UTC: request and answer times are then plain UTC.
 
-    def rule() -> list[etree._Element]:
-        return [T.Bias("0"), T.Time("00:00:00"), T.DayOrder("1"), T.Month("1"), T.DayOfWeek("Sunday")]
+    Live (2016 CU23): Exchange answers "The specified time zone isn't valid" when the standard and
+    daylight rules are the same transition. Two different transition dates with zero bias each are
+    accepted and still mean UTC all year."""
 
-    return T.TimeZone(T.Bias("0"), T.StandardTime(*rule()), T.DaylightTime(*rule()))
+    def rule(month: str) -> list[etree._Element]:
+        return [T.Bias("0"), T.Time("02:00:00"), T.DayOrder("5"), T.Month(month), T.DayOfWeek("Sunday")]
+
+    return T.TimeZone(T.Bias("0"), T.StandardTime(*rule("10")), T.DaylightTime(*rule("3")))
 
 
 def _naive(dt: datetime) -> str:
