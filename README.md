@@ -3,7 +3,7 @@
 An MCP server that gives an AI assistant one person's on-premises Exchange mailbox (mail,
 calendar, contacts, tasks) through Exchange Web Services, acting as that person with no further rights.
 
-**Status: design.** The documents below were written before the code and bind it.
+**Status: 0.1.0.** The documents below were written before the code and bind it; `CHANGELOG.md` says what each release holds.
 
 | Document | What it settles |
 |---|---|
