@@ -1,9 +1,11 @@
-# Publish the image from main, then scan exactly what was pushed.
+# Publish the image from main and from release tags, then scan exactly what was pushed. A tag v<x.y.z>
+# also gets a GitHub Release whose notes are that version's CHANGELOG section and the digest to pin.
 name: publish
 
 on:
   push:
     branches: [main]
+    tags: ["v*.*.*"]
     # No paths filter: a commit that changes only a workflow still needs its image built.
   workflow_dispatch:
 
@@ -63,3 +65,31 @@ jobs:
           PY
       - name: what an installation should pin
         run: echo "$IMAGE"
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [image, trivy]
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: notes from CHANGELOG, the version must have its section
+        shell: bash
+        env:
+          TAG: ${{ github.ref_name }}
+          DIGEST: ${{ needs.image.outputs.digest }}
+        run: |
+          set -euo pipefail
+          version="${TAG#v}"
+          grep -qx "version = \"${version}\"" pyproject.toml || { echo "pyproject.toml is not ${version}"; exit 1; }
+          awk -v v="## ${version}" '$0==v{on=1;next} /^## /{on=0} on' CHANGELOG.md > notes.md
+          test -s notes.md || { echo "CHANGELOG.md has no section ## ${version}"; exit 1; }
+          test -n "$DIGEST" || { echo "the image job returned no digest"; exit 1; }
+          printf '\n## Image\n\n`ghcr.io/wide-moat/exchange-mcp@%s`\n' "$DIGEST" >> notes.md
+      - name: create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "$TAG" --notes-file notes.md --verify-tag
