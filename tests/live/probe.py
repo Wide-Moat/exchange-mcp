@@ -189,41 +189,37 @@ async def probe(base: str, tok: dict) -> None:
 
 
 async def send_check(s: ClientSession, to: str) -> None:
-    """Draft, read the preview, send with the person's confirmation, find it in Sent Items."""
+    """Draft, read the preview, send with the person's confirmation, find it in Sent Items. Any expectation
+    that does not hold stops the probe with a non-zero exit."""
+
+    def expect(ok: bool, what: str) -> None:
+        print(("ok    " if ok else "FAIL  ") + what, flush=True)
+        if not ok:
+            sys.exit(1)
+
     subject = f"exchange-mcp live check {secrets.token_hex(3)}"
     body = "Test message from the exchange-mcp live check: draft, preview, then send. No reply needed."
     d = await s.call_tool("save_draft", {"to": [to], "subject": subject, "body": body})
-    print(
-        "save_draft error=", d.is_error, " ".join(getattr(c, "text", "") for c in d.content)[:200] if d.is_error else ""
-    )
-    if d.is_error:
-        return
+    expect(not d.is_error, "save_draft saved a draft")
     draft = d.structured_content
-    print(
-        "preview keys:",
-        sorted(draft),
-        "external:",
-        bool(draft.get("external_recipients")),
-        "checks_failed:",
-        bool(draft.get("recipient_checks")),
+    expect(
+        bool(draft.get("external_recipients")) or to.endswith(draft.get("to", [""])[0].split("@")[-1]),
+        "the preview names external recipients",
     )
     refused = await s.call_tool("send_draft", {"id": draft["id"], "user_confirmed": "yes"})
-    print("send without the boolean refused:", refused.is_error)
+    expect(refused.is_error, 'send_draft refuses "yes" as a confirmation')
     sent = await s.call_tool("send_draft", {"id": draft["id"], "user_confirmed": True})
-    print(
-        "send_draft error=",
-        sent.is_error,
-        json.dumps(shape(sent.structured_content))[:300]
-        if not sent.is_error
-        else " ".join(getattr(c, "text", "") for c in sent.content)[:300],
-    )
+    expect(not sent.is_error and (sent.structured_content or {}).get("sent") is True, "send_draft sent it")
     again = await s.call_tool("send_draft", {"id": draft["id"], "user_confirmed": True})
-    print("sending the same draft again refused:", again.is_error)
-    await asyncio.sleep(3)
+    expect(again.is_error, "the same draft is not sent twice")
     # Not by search: Exchange indexes a new message minutes later (live), so the newest items are read instead.
-    found = await s.call_tool("list_messages", {"folder": "sent", "limit": 3})
-    items = (found.structured_content or {}).get("items", [])
-    print("newest in Sent Items is this one:", any(subject in i.get("subject", "") for i in items[:1]))
+    for _ in range(10):
+        await asyncio.sleep(2)
+        found = await s.call_tool("list_messages", {"folder": "sent", "limit": 3})
+        items = (found.structured_content or {}).get("items", [])
+        if any(subject in i.get("subject", "") for i in items[:1]):
+            break
+    expect(any(subject in i.get("subject", "") for i in items[:1]), "the newest item in Sent Items is this one")
 
 
 if __name__ == "__main__":
