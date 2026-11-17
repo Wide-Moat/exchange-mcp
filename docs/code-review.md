@@ -1,8 +1,8 @@
 # Code review
 
-What a reviewer — a person, or `ocr review` driven by [`.opencodereview/rule.json`](../.opencodereview/rule.json)
-— looks for in every change. Each item points at the [manifesto](../MANIFESTO.md) rule it protects.
-A finding is fixed, or rejected with its reason written in the review; it is never silently dropped.
+What a reviewer (a person, or `ocr review` driven by [`.opencodereview/rule.json`](../.opencodereview/rule.json))
+looks for in every change. Each item points at the [manifesto](../MANIFESTO.md) rule it protects.
+A finding is fixed, or rejected with its reason written in the review. Nobody drops one silently.
 
 ## Blocking
 
@@ -15,7 +15,7 @@ A finding is fixed, or rejected with its reason written in the review; it is nev
 | B5 | `verify=False`, an `http://` upstream, or a setting that produces either | 22 |
 | B6 | Any code path that sends mail, invites, updates or cancels with attendees, or turns on an automatic reply without `user_confirmed is True` and a bucket draw before the EWS call | 24–26 |
 | B7 | `DeleteType` other than `MoveToDeletedItems`; `EmptyFolder`; `MessageDisposition` other than `SaveOnly` outside `send_draft` | 23, 24 |
-| B8 | Inbox rules, forwarding, delegates, permissions, other mailboxes, export, `SyncFolderItems`, subscriptions, public folders — in a tool, an EWS method or a route; a new operation in the allowlist | 28 |
+| B8 | Inbox rules, forwarding, delegates, permissions, other mailboxes, export, `SyncFolderItems`, subscriptions, public folders, in a tool, an EWS method or a route; a new operation in the allowlist | 28 |
 | B9 | A tool result built from an EWS object without a projection; `ChangeKey`, `ItemClass` or a `ResponseCode` reaching the model | 8 |
 | B10 | A list without a cap of 25, an `offset` argument, a truncation that does not say so | 9 |
 | B11 | Bytes or base64 in a tool result | 10 |

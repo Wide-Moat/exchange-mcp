@@ -4,11 +4,11 @@ This server signs a person in one of two ways, chosen by the installation (`EXCH
 Both put the same OAuth 2.1 server in front of MCP clients, so a client cannot tell them apart;
 they differ in what this server holds on the person's behalf.
 
-> **We consider `adfs` the safer mode.** In it this server never sees the person's password, and
+> **`adfs` is the safer mode.** In it this server never sees the person's password, and
 > the token it holds reaches Exchange Web Services and nothing else. It needs Exchange Server 2019
 > CU13 or later, or Exchange Server Subscription Edition, on every server that accepts client
 > connections, and configuration by the Exchange and AD FS administrators. `password` exists for
-> organisations where that is not available. Its costs are listed below, in full, so that the
+> organisations where that is not available. Its costs are listed below in full, so the
 > organisation's security team decides with them in view.
 
 ## How each mode works
@@ -39,21 +39,36 @@ password
 | Exchange version | 2019 CU13+ or SE on every client-facing server | any version with EWS |
 | Administrators | AD FS application, Exchange authentication policy and auth server | a DNS name, a certificate, network access to EWS |
 
+## The login a person types
+
+People type their login three ways: `name`, `DOMAIN\name`, `name@domain`. The operator sets the
+one form this Exchange accepts, and the server turns each of the three into it, so the same login
+works however it is typed.
+
+| `EXCHANGE_MCP_LOGIN_FORMAT` | `EXCHANGE_MCP_LOGIN_DOMAIN` | Typed | Sent to Exchange |
+|---|---|---|---|
+| `upn` | `corp.example` | `name`, `CORP\name`, `name@corp.example` | `name@corp.example` |
+| `down_level` | `CORP` | `name`, `CORP\name`, `name@corp.example` | `CORP\name` |
+
+A login with a domain other than the configured one is refused before any attempt reaches
+Exchange, so it cannot count against someone else's lockout. The person's identity inside the
+tokens is the normalised login, so one person has one identity whichever way they typed it.
+
 ## The risks of `password`, and what holds each
 
 | Risk | What holds it | What is left |
 |---|---|---|
 | This server sees directory passwords | they are opened only in memory, for one request, and never written to a log, a result, an error or a URL (tested) | code running inside the pod sees the passwords of people using it at that moment |
 | A password opens more than mail | only an allowlist of EWS operations is sent; rules, forwarding, delegates and other mailboxes do not exist here | outside this server, a leaked password is a leaked account |
-| No second factor | — | none; this is the main reason `adfs` is preferred |
+| No second factor | n/a | none; this is the main reason `adfs` is preferred |
 | Guessing passwords, locking accounts | attempts limited per login (5 in 15 minutes) and per network (20); an unknown login and a wrong password answer alike | set the limit below the directory's lockout threshold |
-| A refresh token carries the password for a long time | refresh tokens in `password` mode live 12 hours by default, 24 at most; rotating the key ends all of them | — |
+| A refresh token carries the password for a long time | refresh tokens in `password` mode live 12 hours by default, 24 at most; rotating the key ends all of them | none |
 | A stolen token used elsewhere | tokens are sealed with AES-GCM and bound to kind, person, client, expiry and key id; without the key they are noise | a token stolen together with the key opens the password |
-| TLS to an internal CA | the operator's CA bundle; verification cannot be turned off; `https` only | — |
+| TLS to an internal CA | the operator's CA bundle; verification cannot be turned off; `https` only | none |
 
 ## The sealing key
 
-Every token, draft reference, cursor and file link is sealed with one key. Where that key lives
+Every token, draft reference, cursor and file link is sealed with one key. The place where the key lives
 decides what a thief has to take.
 
 | `EXCHANGE_MCP_KEY_PROVIDER` | Where the key is | Pod restart | Replicas | Use it when |
@@ -71,11 +86,11 @@ Rules, enforced at start:
 - **A key file** must be at least 32 bytes and readable by its owner only.
 - **Rotation** is a new key id. Tokens sealed under a key id the server no longer holds answer 401;
   clients re-authorise, the person signs in once.
-- **Generating a new key on every deploy** is allowed and means everyone signs in again after a
-  deploy. The chart's default keeps the key until it is rotated on purpose.
+- **Generating a new key on every deploy** is allowed; everyone then signs in again after each
+  deploy. The chart's default keeps the key until the operator rotates it.
 
-Whatever the provider, code running inside the pod can ask for unseals while it runs. No provider
-protects against that; `vault` makes each unseal visible.
+With any provider, code running inside the pod can ask for unseals while it runs. No provider
+prevents that; `vault` makes each unseal visible.
 
 ## When a token stops working
 

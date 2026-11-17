@@ -31,7 +31,7 @@ fetches the current `ChangeKey` itself before an update.
 | Person | display name, part of a name, or an address | `ResolveNames` against the address book and the person's contacts; ambiguity is an error listing up to 5 candidates with name, address, title |
 | Mail folder | well-known name (`inbox`, `sent`, `drafts`, `deleted`, `archive`, `junk`, `outbox`), a display name, or a path `Inbox/Projects` | `FindFolder` (deep traversal, cached per request); two folders with one name is an error listing their paths |
 | Time | `YYYY-MM-DD HH:MM` local to the mailbox time zone, or with an explicit offset | converts; output is local with offset |
-| Duration | minutes | — |
+| Duration | minutes | n/a |
 | Cursor | opaque signed string from the previous page | wraps the EWS paging offset; a cursor from another tool, person or query is refused |
 | Limit | 1–25, default 10 | values above 25 are clamped and the result says so |
 | Ids | strings, as returned | a number is refused |
@@ -43,9 +43,9 @@ Every tool, on every call, refuses with a clear `isError`:
 | Token missing, expired, altered, or sealed under a key no longer held | HTTP 401 with `resource_metadata`; a client that does not re-authorize shows: sign in again at `<base>/signin` |
 | EWS `401` (password changed, account disabled, AD FS token revoked) | sign in again; nothing was done |
 | EWS `ErrorAccessDenied` | Exchange refused; which action did not happen |
-| EWS `ErrorItemNotFound` on an id | the item does not exist or is not yours — never which |
+| EWS `ErrorItemNotFound` on an id | the item does not exist or is not yours; the text never says which |
 | `ErrorServerBusy` after back-off honouring `BackOffMilliseconds` | Exchange is busy; try again in N seconds |
-| Any other EWS failure | that the action did not happen, with a correlation id — never a success |
+| Any other EWS failure | that the action did not happen, with a correlation id; never reported as a success |
 
 ## Account
 
@@ -244,6 +244,8 @@ Moves a task to Deleted Items. Upstream: `DeleteItem DeleteType=MoveToDeletedIte
 | a code exchange with a wrong PKCE verifier | tests/unit/test_http.py::test_a_wrong_pkce_verifier_is_refused |
 | a redirect URI that is not https (except loopback) or differs from the registration | tests/unit/test_oauth.py::test_redirect_uris_are_exact |
 | a 6th password attempt for one login within 15 minutes, or a 21st from one network | tests/unit/test_signin.py::test_password_attempts_are_limited |
+| a login whose domain is not the configured one, before any attempt reaches Exchange | tests/unit/test_signin.py::test_a_login_of_another_domain_is_refused |
+| one person counted as two because the login was typed in another form | tests/unit/test_signin.py::test_every_login_form_is_one_person |
 | a sign-in answer that differs between an unknown login and a wrong password | tests/unit/test_signin.py::test_unknown_and_wrong_look_the_same |
 | an EWS or AD FS address that is not https, or TLS verification turned off | tests/unit/test_config.py::test_tls_is_always_verified |
 | `password` mode refresh tokens longer than 24 hours | tests/unit/test_config.py::test_password_mode_refresh_is_capped |
