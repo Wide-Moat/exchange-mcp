@@ -61,8 +61,8 @@ automatic reply is on. Upstream: `ResolveNames` on the person's own address,
 Find colleagues, contacts and rooms. `source`: `all`, `directory` (the address book), `contacts`
 (the person's own contacts), `rooms` (room lists and rooms). Returns name, address, title,
 department, phone; each result says where it came from. Upstream: `ResolveNames`
-(`ReturnFullContactData`, `SearchScope=ActiveDirectoryContacts`), `FindPeople` on the contacts
-folder, `GetRoomLists` / `GetRooms`.
+(`ReturnFullContactData`; `SearchScope` `ActiveDirectoryContacts`, `ActiveDirectory`, or `Contacts` for
+`source=contacts`), `GetRoomLists` / `GetRooms`.
 
 | Must refuse | Test |
 |---|---|

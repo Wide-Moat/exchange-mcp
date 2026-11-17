@@ -11,6 +11,10 @@ answers in the measured shape. No host, address or person of the installation go
 | `save_draft` → `send_draft` to an external address | 2016 CU23 | draft marked as ours, external recipient flagged, `"yes"` refused, sent once, a second send of the same draft refused, newest item in Sent Items | tests/unit/test_mail.py::test_send_draft_sends_the_saved_draft_once |
 | AQS search for a message sent seconds ago | 2016 CU23 | not found yet: the search index lags by minutes; newest-first listing finds it | (live probe reads Sent Items without a query) |
 | `GetUserAvailability` with a UTC zone whose two rules are the same transition | 2016 CU23 | fault "The specified time zone isn't valid"; two distinct zero-bias transitions work | tests/unit/test_calendar.py::test_the_utc_zone_has_two_distinct_transitions |
+| `FindItem` on Contacts with `Contains` on `contacts:DisplayName` and `EmailAddress1-3` | 2016 CU23 | matches a whole address only, never part of a name; `ResolveNames` with `SearchScope=Contacts` finds both | tests/unit/test_people.py::test_contacts_come_from_the_contacts_folder_with_ids |
+| Meetings: create, weekly repeat read back, invitation, move, cancel; free/busy and slots | 2016 CU23 | as built | tests/unit/test_calendar.py |
+| `DeleteItem` of a task with `AffectedTaskOccurrences=SpecifiedOccurrenceOnly` | 2016 CU23 | `ErrorCannotDeleteTaskOccurrence`; `AllOccurrences` works | tests/unit/test_tasks.py::test_a_task_is_deleted_whole |
+| Contacts and tasks: create, find, complete, delete | 2016 CU23 | as built after the two fixes above | tests/unit/test_contacts.py, test_tasks.py |
 | `FindItem` on tasks with a restriction on `task:Status` | 2016 CU23 | `ErrorInvalidValueForProperty`; `task:IsComplete` works instead | tests/unit/test_tasks.py::test_list_tasks_filters_open_tasks |
 
 ## Verify on the first live run

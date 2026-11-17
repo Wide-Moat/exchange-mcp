@@ -92,3 +92,13 @@ async def test_delete_task_refuses_what_is_not_a_task(rt, ews, invoke):
     ews.on("GetItem", got()).on("DeleteItem", ok("DeleteItem"))
     r = await invoke("delete_task", id="T1")
     assert not r.is_error and ews.last("DeleteItem").body.get("DeleteType") == "MoveToDeletedItems"
+
+
+async def test_a_task_is_deleted_whole(rt, ews, invoke):
+    """Live: Exchange answers ErrorCannotDeleteTaskOccurrence to SpecifiedOccurrenceOnly on a task."""
+    ews.on("GetItem", ok("GetItem", '<m:Items><t:Task><t:ItemId Id="T1" ChangeKey="CK"/></t:Task></m:Items>'))
+    ews.on("DeleteItem", ok("DeleteItem"))
+    r = await invoke("delete_task", id="T1")
+    assert not r.is_error, r.text
+    sent = ews.last("DeleteItem").body
+    assert sent.get("AffectedTaskOccurrences") == "AllOccurrences" and sent.get("DeleteType") == "MoveToDeletedItems"

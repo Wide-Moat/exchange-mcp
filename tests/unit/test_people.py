@@ -68,22 +68,26 @@ async def test_directory_only_searches_the_address_book(rt, ews, invoke):
 
 
 async def test_contacts_come_from_the_contacts_folder_with_ids(rt, ews, invoke):
+    """Live (2016 CU23): a Contains restriction on contact fields matches only a whole address, so
+    contacts are found the way Outlook finds them, by ResolveNames over Contacts."""
+    rows = "".join(
+        f"<t:Resolution><t:Mailbox><t:Name>{n}</t:Name><t:EmailAddress>{a}</t:EmailAddress>"
+        f'<t:MailboxType>Contact</t:MailboxType><t:ItemId Id="{i}" ChangeKey="K"/></t:Mailbox></t:Resolution>'
+        for n, a, i in (("Pat Friend", "pat@home.example", "C1"), ("Pat Other", "pat2@home.example", "C2"))
+    )
     ews.on(
-        "FindItem",
+        "ResolveNames",
         ok(
-            "FindItem",
-            '<m:RootFolder TotalItemsInView="3" IncludesLastItemInRange="false"><t:Items>'
-            '<t:Contact><t:ItemId Id="C1" ChangeKey="K"/><t:DisplayName>Pat Friend</t:DisplayName>'
-            '<t:EmailAddresses><t:Entry Key="EmailAddress1">pat@home.example</t:Entry></t:EmailAddresses>'
-            "</t:Contact></t:Items></m:RootFolder>",
+            "ResolveNames",
+            f'<m:ResolutionSet TotalItemsInView="2" IncludesLastItemInRange="true">{rows}</m:ResolutionSet>',
         ),
     )
     r = await invoke("list_people", query="pat", source="contacts", limit=1)
     assert not r.is_error, r.text
     assert r.data["items"] == [{"name": "Pat Friend", "address": "pat@home.example", "source": "contacts", "id": "C1"}]
     assert r.data["has_more"]
-    sent = ews.last("FindItem").xml()
-    assert 'Id="contacts"' in sent and 'Value="pat"' in sent
+    sent = ews.last("ResolveNames")
+    assert sent.body.get("SearchScope") == "Contacts" and "pat" in sent.xml()
 
 
 async def test_rooms_list_without_a_query(rt, ews, invoke):

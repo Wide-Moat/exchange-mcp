@@ -47,8 +47,8 @@ def expect(ok: bool, what: str) -> None:
         raise Failed(1)
 
 
-async def call(s: ClientSession, name: str, **args):
-    r = await s.call_tool(name, args)
+async def call(s: ClientSession, tool: str, /, **args):
+    r = await s.call_tool(tool, args)
     text = " ".join(getattr(c, "text", "") for c in r.content)
     return r.is_error, (r.structured_content or {}), text
 

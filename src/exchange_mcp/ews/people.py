@@ -11,7 +11,6 @@ from lxml import etree
 
 from exchange_mcp.core.errors import ExchangeError, invalid
 from exchange_mcp.ews.client import Ews
-from exchange_mcp.ews.common import Page, page_of, paged_view
 from exchange_mcp.ews.soap import M, T, find, findall, text
 
 GROUP_KINDS = frozenset({"PublicDL", "PrivateDL", "GroupMailbox"})
@@ -67,14 +66,20 @@ def _phone(el: etree._Element | None) -> str:
     return ""
 
 
-async def resolve_names(ews: Ews, query: str, *, directory_only: bool) -> list[Found]:
-    """ResolveNames over the address book (and the person's contacts unless directory_only)."""
+async def resolve_names(
+    ews: Ews, query: str, *, directory_only: bool = False, contacts_only: bool = False
+) -> list[Found]:
+    """ResolveNames over the address book and the person's contacts, or only one of them."""
     try:
         messages = await ews.call(
             M.ResolveNames(
                 M.UnresolvedEntry(query),
                 ReturnFullContactData="true",
-                SearchScope="ActiveDirectory" if directory_only else "ActiveDirectoryContacts",
+                SearchScope="ActiveDirectory"
+                if directory_only
+                else "Contacts"
+                if contacts_only
+                else "ActiveDirectoryContacts",
             )
         )
     except ExchangeError as e:
@@ -113,60 +118,6 @@ async def resolve_names(ews: Ews, query: str, *, directory_only: bool) -> list[F
 
 def _indexed(uri: str, key: str) -> etree._Element:
     return T.IndexedFieldURI(FieldURI=uri, FieldIndex=key)
-
-
-async def find_contacts(ews: Ews, query: str, offset: int, limit: int) -> tuple[list[Found], Page]:
-    """The person's own Contacts folder, by part of a name or address, A to Z, with item ids."""
-
-    def contains(path: etree._Element) -> etree._Element:
-        return T.Contains(
-            path, T.Constant(Value=query), ContainmentMode="Substring", ContainmentComparison="IgnoreCase"
-        )
-
-    messages = await ews.call(
-        M.FindItem(
-            M.ItemShape(
-                T.BaseShape("IdOnly"),
-                T.AdditionalProperties(
-                    T.FieldURI(FieldURI="contacts:DisplayName"),
-                    T.FieldURI(FieldURI="contacts:CompanyName"),
-                    T.FieldURI(FieldURI="contacts:JobTitle"),
-                    T.FieldURI(FieldURI="contacts:Department"),
-                    _indexed("contacts:EmailAddress", "EmailAddress1"),
-                    _indexed("contacts:PhoneNumber", "BusinessPhone"),
-                    _indexed("contacts:PhoneNumber", "MobilePhone"),
-                ),
-            ),
-            paged_view(offset, limit),
-            M.Restriction(
-                T.Or(
-                    contains(T.FieldURI(FieldURI="contacts:DisplayName")),
-                    *[contains(_indexed("contacts:EmailAddress", k)) for k in EMAIL_KEYS],
-                )
-            ),
-            M.SortOrder(T.FieldOrder(T.FieldURI(FieldURI="contacts:DisplayName"), Order="Ascending")),
-            M.ParentFolderIds(T.DistinguishedFolderId(Id="contacts")),
-            Traversal="Shallow",
-        )
-    )
-    page = page_of(messages[0], "t:Items", offset, limit)
-    out = []
-    for el in page.elements:
-        group = etree.QName(el).localname == "DistributionList"
-        out.append(
-            Found(
-                name=text(el, "t:DisplayName"),
-                address=text(el, "t:EmailAddresses/t:Entry[@Key='EmailAddress1']"),
-                source="contacts",
-                group=group,
-                id=el.find("{*}ItemId").get("Id"),
-                title=text(el, "t:JobTitle"),
-                department=text(el, "t:Department"),
-                company=text(el, "t:CompanyName"),
-                phone=_phone(el),
-            )
-        )
-    return out, page
 
 
 async def rooms(ews: Ews) -> list[Found]:
@@ -316,7 +267,6 @@ __all__ = [
     "Found",
     "contact_change_key",
     "create_contact",
-    "find_contacts",
     "resolve_names",
     "rooms",
     "update_contact",

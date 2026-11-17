@@ -55,10 +55,12 @@ async def list_people(
         scope = {"q": q, "s": source}
         start = (await c.cursor_in(cursor, scope) or {}).get("o", 0)
         if source == "contacts":
-            found, page = await ep.find_contacts(c.ews, q, start, n)
-            nxt = await c.cursor_out({"o": page.next_offset} if page.next_offset is not None else None, scope)
-            return page_result([_row(f) for f in found], nxt, **extra)
-        if source == "rooms":
+            # Live (2016 CU23): a Contains restriction on contact fields matches only a whole address;
+            # ResolveNames over Contacts finds part of a name or an address, as Outlook does.
+            found = await ep.resolve_names(c.ews, q, contacts_only=True)
+            every = [f for f in found if f.source == "contacts"]
+            cut = getattr(found, "truncated", False)
+        elif source == "rooms":
             every = await ep.rooms(c.ews)
             cut = getattr(every, "truncated", False)
             if q:

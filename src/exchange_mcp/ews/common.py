@@ -91,7 +91,9 @@ async def move_to_deleted(ews: Ews, ids: list[str]) -> None:
         M.DeleteItem(
             item_ids(ids),
             DeleteType="MoveToDeletedItems",
-            AffectedTaskOccurrences="SpecifiedOccurrenceOnly",
+            # Live (2016 CU23): a task refuses SpecifiedOccurrenceOnly (ErrorCannotDeleteTaskOccurrence).
+            # The attribute matters for tasks only; a task is deleted whole, as Outlook does.
+            AffectedTaskOccurrences="AllOccurrences",
             SendMeetingCancellations="SendToNone",
         )
     )
