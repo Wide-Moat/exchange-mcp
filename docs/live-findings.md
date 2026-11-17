@@ -5,7 +5,10 @@ answers in the measured shape. No host, address or person of the installation go
 
 | Operation | Exchange build | Observed | Unit test |
 |---|---|---|---|
-| (none yet) | | | |
+| NTLM sign-in, `ResolveNames` for one's own short name identifies the mailbox | 2016 CU23 | sign-in completes, tokens issued | tests/unit/test_signin.py::test_a_full_sign_in_issues_tokens_that_carry_the_person |
+| `FindItem` with `item:Preview`, `item:Flag`, sort and paging; AQS `QueryString` | 2016 CU23 | accepted | tests/unit/test_mail.py |
+| `FindFolder` deep traversal; `CalendarView`; `GetRoomLists` | 2016 CU23 | accepted | tests/unit/test_calendar.py, test_people.py |
+| `FindItem` on tasks with a restriction on `task:Status` | 2016 CU23 | `ErrorInvalidValueForProperty`; `task:IsComplete` works instead | tests/unit/test_tasks.py::test_list_tasks_filters_open_tasks |
 
 ## Verify on the first live run
 

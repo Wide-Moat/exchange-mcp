@@ -160,6 +160,80 @@ T: dict[str, dict[str, str]] = {
             "В ИИ-приложении сбросьте авторизацию этого коннектора и подключитесь заново."
         ),
     },
+    "es": {
+        "title": "Iniciar sesión en Exchange",
+        "description": "Inicie sesión en su correo de trabajo para conectarlo a su aplicación de IA.",
+        "h1": "Iniciar sesión en el correo",
+        "lede": "Use el usuario y la contraseña de su correo de trabajo.",
+        "login": "Usuario",
+        "login_hint": "nombre, DOMINIO\\nombre o nombre@dominio",
+        "password": "Contraseña",
+        "connect": "Conectar",
+        "note": (
+            "Este conector guarda su contraseña cifrada dentro de la conexión de su aplicación y solo la usa para "
+            "acceder a su buzón. Los correos se envían solo después de que usted lo confirme."
+        ),
+        "wrong": "El usuario o la contraseña no se aceptaron.",
+        "limited": "Demasiados intentos. Espere 15 minutos antes de volver a intentarlo.",
+        "unavailable": "Exchange no respondió. Inténtelo de nuevo en unos minutos.",
+        "h1_again": "Vuelva a conectar",
+        "expired": "Este enlace de inicio de sesión caducó o ya se usó. Vuelva a conectar desde su aplicación de IA.",
+        "unknown_client": (
+            "Este servidor ya no reconoce la conexión de su aplicación de IA: el servidor se actualizó o cambió su "
+            "clave. En su aplicación de IA, borre la autorización de este conector y vuelva a conectar."
+        ),
+    },
+    "de": {
+        "title": "Bei Exchange anmelden",
+        "description": "Melden Sie sich bei Ihrem dienstlichen Postfach an, um es mit Ihrer KI-App zu verbinden.",
+        "h1": "Am Postfach anmelden",
+        "lede": "Verwenden Sie Benutzername und Kennwort Ihrer dienstlichen E-Mail.",
+        "login": "Benutzername",
+        "login_hint": "name, DOMÄNE\\name oder name@domäne",
+        "password": "Kennwort",
+        "connect": "Verbinden",
+        "note": (
+            "Dieser Connector speichert Ihr Kennwort verschlüsselt in der Verbindung Ihrer App und nutzt es nur für "
+            "den Zugriff auf Ihr Postfach. E-Mails werden erst nach Ihrer Bestätigung gesendet."
+        ),
+        "wrong": "Benutzername oder Kennwort wurden nicht akzeptiert.",
+        "limited": "Zu viele Versuche. Warten Sie 15 Minuten, bevor Sie es erneut versuchen.",
+        "unavailable": "Exchange hat nicht geantwortet. Versuchen Sie es in einigen Minuten erneut.",
+        "h1_again": "Erneut verbinden",
+        "expired": "Dieser Anmeldelink ist abgelaufen oder wurde bereits verwendet. Verbinden Sie sich erneut aus "
+        "Ihrer KI-App.",
+        "unknown_client": (
+            "Dieser Server erkennt die Verbindung Ihrer KI-App nicht mehr: Der Server wurde aktualisiert oder sein "
+            "Schlüssel geändert. Entfernen Sie in Ihrer KI-App die Autorisierung dieses Connectors und verbinden "
+            "Sie sich erneut."
+        ),
+    },
+    "fr": {
+        "title": "Connexion à Exchange",
+        "description": "Connectez-vous à votre messagerie professionnelle pour la relier à votre application d'IA.",
+        "h1": "Connexion à la messagerie",
+        "lede": "Utilisez l'identifiant et le mot de passe de votre messagerie professionnelle.",
+        "login": "Identifiant",
+        "login_hint": "nom, DOMAINE\\nom ou nom@domaine",
+        "password": "Mot de passe",
+        "connect": "Se connecter",
+        "note": (
+            "Ce connecteur conserve votre mot de passe chiffré dans la connexion de votre application et ne "
+            "l'utilise que pour accéder à votre boîte aux lettres. Les messages ne partent qu'après votre "
+            "confirmation."
+        ),
+        "wrong": "L'identifiant ou le mot de passe n'a pas été accepté.",
+        "limited": "Trop de tentatives. Attendez 15 minutes avant de réessayer.",
+        "unavailable": "Exchange n'a pas répondu. Réessayez dans quelques minutes.",
+        "h1_again": "Reconnectez-vous",
+        "expired": "Ce lien de connexion a expiré ou a déjà été utilisé. Reconnectez-vous depuis votre application "
+        "d'IA.",
+        "unknown_client": (
+            "Ce serveur ne reconnaît plus la connexion de votre application d'IA : le serveur a été mis à jour ou "
+            "sa clé a changé. Dans votre application d'IA, supprimez l'autorisation de ce connecteur et "
+            "reconnectez-vous."
+        ),
+    },
 }
 
 

@@ -74,7 +74,13 @@ async def test_list_tasks_filters_open_tasks(rt, ews, invoke):
     assert not r.is_error, r.text
     assert r.data["items"] == [{"id": "T1", "subject": "Report", "status": "not_started", "due": "2026-11-20"}]
     xml = ews.last("FindItem").xml()
-    assert "IsNotEqualTo" in xml and 'Id="tasks"' in xml and "2026-11-20T23:00:00Z" in xml
+    # live: a restriction on task:Status is refused (ErrorInvalidValueForProperty); IsComplete is not
+    assert (
+        'FieldURI="task:IsComplete"' in xml
+        and 'Value="false"' in xml
+        and 'task:Status"/><t:FieldURIOrConstant' not in xml
+    )
+    assert 'Id="tasks"' in xml and "2026-11-20T23:00:00Z" in xml
     assert ews.writes() == []
 
 

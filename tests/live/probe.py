@@ -1,0 +1,173 @@
+"""A live probe: an MCP client that signs in through the browser and calls the read-only tools.
+
+    uv run python tests/live/probe.py http://localhost:8765
+
+It registers itself, opens the sign-in page in the default browser (the person types their password
+there, never here), receives the code on a loopback port, and calls each read tool once. It prints the
+shape of every answer (keys, counts, errors), never mail content, names or addresses.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import base64
+import hashlib
+import json
+import os
+import secrets
+import subprocess
+import sys
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from threading import Thread
+from urllib.parse import parse_qs, urlencode, urlsplit
+
+import httpx
+from mcp import ClientSession
+from mcp.client.streamable_http import streamable_http_client
+
+READS = [
+    ("get_connection", {}),
+    ("list_messages", {"limit": 3}),
+    ("list_messages", {"kind": "folders", "limit": 5}),
+    ("list_messages", {"query": "report", "limit": 2}),
+    ("list_events", {"start": "2026-11-17 00:00", "end": "2026-11-24 00:00", "limit": 3}),
+    ("list_tasks", {"limit": 3}),
+    ("list_people", {"source": "rooms", "query": "", "limit": 3}),
+]
+
+
+def shape(value, depth: int = 0):
+    if isinstance(value, dict):
+        return {k: shape(v, depth + 1) for k, v in value.items()} if depth < 2 else f"dict[{len(value)}]"
+    if isinstance(value, list):
+        return [shape(value[0], depth + 1), f"... {len(value)} items"] if value else []
+    if isinstance(value, bool) or value is None:
+        return value
+    return type(value).__name__
+
+
+def catch_code(port: int) -> dict:
+    got: dict = {}
+
+    class H(BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802
+            got.update({k: v[0] for k, v in parse_qs(urlsplit(self.path).query).items()})
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"Connected. You can close this tab.")
+
+        def log_message(self, *a):
+            pass
+
+    srv = HTTPServer(("127.0.0.1", port), H)
+    Thread(target=srv.handle_request, daemon=True).start()
+    return got
+
+
+TOKEN_FILE = os.environ.get("PROBE_TOKEN_FILE")  # optional: reuse one sign-in across runs (0600)
+
+
+async def main(base: str) -> None:
+    if TOKEN_FILE and os.path.exists(TOKEN_FILE):
+        saved = json.loads(open(TOKEN_FILE).read())
+        if "client_id" not in saved:  # saved before refresh support: use the access token while it lives
+            await probe(base, saved)
+            return
+        async with httpx.AsyncClient(base_url=base) as h:  # a fresh access token from the refresh token
+            r = await h.post(
+                "/token",
+                data={
+                    "grant_type": "refresh_token",
+                    "refresh_token": saved["refresh_token"],
+                    "client_id": saved["client_id"],
+                },
+            )
+        if r.status_code == 200:
+            tok = {**r.json(), "client_id": saved["client_id"]}
+            save(tok)
+            await probe(base, tok)
+            return
+        print("the saved sign-in has ended; signing in again", flush=True)
+    port = 33418
+    redirect = f"http://127.0.0.1:{port}/callback"
+    async with httpx.AsyncClient(base_url=base) as h:
+        cid = (
+            await h.post(
+                "/register",
+                json={
+                    "redirect_uris": [redirect],
+                    "token_endpoint_auth_method": "none",
+                    "grant_types": ["authorization_code", "refresh_token"],
+                    "response_types": ["code"],
+                },
+            )
+        ).json()["client_id"]
+        verifier = secrets.token_urlsafe(48)
+        challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
+        state = secrets.token_urlsafe(8)
+        got = catch_code(port)
+        url = f"{base}/authorize?" + urlencode(
+            {
+                "response_type": "code",
+                "client_id": cid,
+                "redirect_uri": redirect,
+                "state": state,
+                "code_challenge": challenge,
+                "code_challenge_method": "S256",
+            }
+        )
+        subprocess.run(["open", url], check=False)  # noqa: S603, S607
+        print("sign-in page opened in the browser; waiting...", flush=True)
+        for _ in range(600):
+            if got:
+                break
+            await asyncio.sleep(0.5)
+        if got.get("state") != state or "code" not in got:
+            sys.exit(f"no code came back: {sorted(got)}")
+        tok = (
+            await h.post(
+                "/token",
+                data={
+                    "grant_type": "authorization_code",
+                    "code": got["code"],
+                    "redirect_uri": redirect,
+                    "client_id": cid,
+                    "code_verifier": verifier,
+                },
+            )
+        ).json()
+    print("token:", sorted(tok), "expires_in", tok.get("expires_in"))
+    tok["client_id"] = cid
+    save(tok)
+    await probe(base, tok)
+
+
+def save(tok: dict) -> None:
+    if TOKEN_FILE:
+        fd = os.open(TOKEN_FILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as f:
+            f.write(json.dumps(tok))
+
+
+async def probe(base: str, tok: dict) -> None:
+    headers = {"Authorization": f"Bearer {tok['access_token']}"}
+    import httpx2
+
+    client = httpx2.AsyncClient(headers=headers, timeout=60)
+    async with (
+        streamable_http_client(f"{base}/mcp", http_client=client) as streams,
+        ClientSession(streams[0], streams[1]) as s,
+    ):
+        await s.initialize()
+        tools = await s.list_tools()
+        print("tools:", len(tools.tools))
+        for name, args in READS:
+            res = await s.call_tool(name, args)
+            out = res.structured_content
+            text = " ".join(getattr(c, "text", "") for c in res.content)
+            print(f"\n== {name} {json.dumps(args)} error={res.is_error}")
+            print(text[:300] if res.is_error else json.dumps(shape(out), ensure_ascii=False)[:1200])
+
+
+if __name__ == "__main__":
+    asyncio.run(main(sys.argv[1].rstrip("/")))

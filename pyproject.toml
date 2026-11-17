@@ -50,6 +50,7 @@ ignore = ["S101", "S105", "S106", "B008", "UP040"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S", "E501"]
+"tests/live/**" = ["S", "E501", "ASYNC"]  # a hand-run probe, not server code
 "src/exchange_mcp/signin.py" = ["E501"]
 
 [tool.ruff.format]

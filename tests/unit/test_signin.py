@@ -187,3 +187,39 @@ async def test_an_expired_sign_in_link_is_refused(ews):
     f = Flow(ews)
     r = await f.client.get("/signin", params={"request": "k1.AAAA"})
     assert r.status_code == 410
+
+
+def test_every_language_says_everything():
+    from exchange_mcp.signin import T
+
+    assert set(T) == {"en", "ru", "es", "de", "fr"}
+    for lang, words in T.items():
+        assert set(words) == set(T["en"]), lang
+        assert all(v.strip() for v in words.values()), lang
+
+
+@pytest.mark.parametrize(
+    "header,lang",
+    [
+        ("de-DE,de;q=0.9,en;q=0.8", "de"),
+        ("fr-CH, fr;q=0.9", "fr"),
+        ("es-ES", "es"),
+        ("ru,en;q=0.5", "ru"),
+        ("en;q=0.2,ru;q=0.9", "ru"),
+        ("zh-CN,zh;q=0.9", "en"),
+        ("", "en"),
+        ("de;q=0", "en"),
+    ],
+)
+def test_the_page_speaks_the_browsers_language(header, lang):
+    from exchange_mcp.signin import pick_lang
+
+    assert pick_lang(header) == lang
+
+
+async def test_the_sign_in_page_is_served_in_that_language(ews):
+    f = Flow(ews)
+    cid = await f.register()
+    rid = await f.request_id(cid, _pkce()[1])
+    r = await f.client.get("/signin", params={"request": rid}, headers={"Accept-Language": "de-DE,de;q=0.9"})
+    assert '<html lang="de">' in r.text and "Kennwort" in r.text and r.headers["content-language"] == "de"

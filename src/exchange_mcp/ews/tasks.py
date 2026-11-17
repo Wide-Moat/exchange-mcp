@@ -72,10 +72,12 @@ async def find_tasks(
     ews: Ews, *, status: str, query: str | None, due_before: str | None, offset: int, limit: int
 ) -> tuple[list[Task], Page]:
     terms = []
+    # Live: Exchange 2016 answers ErrorInvalidValueForProperty to a restriction on task:Status;
+    # task:IsComplete is the property it filters on.
     if status == "open":
-        terms.append(_const("task:Status", "Completed", "IsNotEqualTo"))
+        terms.append(_const("task:IsComplete", "false", "IsEqualTo"))
     elif status == "completed":
-        terms.append(_const("task:Status", "Completed", "IsEqualTo"))
+        terms.append(_const("task:IsComplete", "true", "IsEqualTo"))
     if due_before:
         terms.append(_const("task:DueDate", due_before, "IsLessThan"))
     if query:
