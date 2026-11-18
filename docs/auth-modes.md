@@ -81,8 +81,8 @@ organisation's chat.
 
 ## The sealing key
 
-Every token, draft reference, cursor and file link is sealed with one key. The place where the key lives
-decides what a thief has to take.
+Every token, draft reference, cursor and file link is sealed with one key. Where the key lives
+sets what a thief has to steal.
 
 | `EXCHANGE_MCP_KEY_PROVIDER` | Where the key is | Pod restart | Replicas | Use it when |
 |---|---|---|---|---|
@@ -118,7 +118,7 @@ way:
 
 ## What the administrators do for `adfs`
 
-Written out in [`docs/admin-guide.md`](admin-guide.md) (to be written with the `adfs` mode):
+Written out in [`docs/admin-guide.md`](admin-guide.md):
 an authentication policy that keeps Modern Auth on EWS only, an AD FS server application with key
 authentication and this server's callback, a Web API for Exchange whose `scp` rule carries
 `EWS.AccessAsUser.All` and `offline_access` and nothing for ActiveSync, Exchange's trust in AD FS

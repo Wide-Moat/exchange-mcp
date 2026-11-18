@@ -36,7 +36,7 @@ fetches the current `ChangeKey` itself before an update.
 | Limit | 1–25, default 10 | values above 25 are clamped and the result says so |
 | Ids | strings, as returned | a number is refused |
 
-Every tool, on every call, refuses with a clear `isError`:
+Every tool, on every call, refuses with `isError`:
 
 | Situation | Text tells the person |
 |---|---|
