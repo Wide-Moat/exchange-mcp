@@ -156,7 +156,8 @@ def _contact_item(item: str, name: str, title: str, company: str, phone: str) ->
     return (
         f'<t:Contact><t:ItemId Id="{item}" ChangeKey="K"/><t:DisplayName>{name}</t:DisplayName>'
         f"<t:CompanyName>{company}</t:CompanyName>"
-        f'<t:PhoneNumbers><t:Entry Key="MobilePhone">{phone}</t:Entry></t:PhoneNumbers>'
+        f'<t:PhoneNumbers><t:Entry Key="BusinessPhone">{phone}</t:Entry>'
+        '<t:Entry Key="MobilePhone">+1 555 0199</t:Entry></t:PhoneNumbers>'
         f"<t:JobTitle>{title}</t:JobTitle></t:Contact>"
     )
 
@@ -184,7 +185,9 @@ async def test_a_contact_reads_its_name_title_and_phone_from_the_item(rt, ews, i
     assert not r.is_error, r.text
     [row] = r.data["items"]
     assert row["name"] == "Pat Friend" and row["id"] == "C1"
-    assert row["title"] == "Buyer" and row["company"] == "Home Ltd" and row["phone"] == "+1 555 0101"
+    assert (
+        row["title"] == "Buyer" and row["company"] == "Home Ltd" and row["phone"] == "+1 555 0101; +1 555 0199"
+    )  # every number, business first
     sent = ews.last("GetItem")
     assert "C1" in sent.xml()
     asked = sent.root.xpath("//*[local-name()='IndexedFieldURI']/@FieldIndex")

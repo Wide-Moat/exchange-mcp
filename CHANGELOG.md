@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.5
+
+| Area | Fixed |
+|---|---|
+| Sender filter | `sender=<own address>` found 1 of 5 sent messages: Exchange 2016 matches an address only on new messages, not replies or forwards. The address is searched together with its owner's name as the address book writes it, then held to the exact address |
+| People | every phone number of an entry is shown, business first, not only the first |
+
 ## 0.1.4
 
 | Area | Fixed |

@@ -59,11 +59,9 @@ def _ok(response: etree._Element) -> None:
 
 
 def _phone(el: etree._Element | None) -> str:
-    for key in PHONE_KEYS:
-        v = text(el, f"t:PhoneNumbers/t:Entry[@Key='{key}']")
-        if v:
-            return v
-    return ""
+    """Every number the entry has, business first: one field, so a mobile is not lost behind it (QA D12)."""
+    numbers = [text(el, f"t:PhoneNumbers/t:Entry[@Key='{key}']") for key in PHONE_KEYS]
+    return "; ".join(dict.fromkeys(n for n in numbers if n))
 
 
 async def resolve_names(
