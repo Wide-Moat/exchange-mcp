@@ -3,7 +3,13 @@
 An MCP server that gives an AI assistant one person's on-premises Exchange mailbox (mail,
 calendar, contacts, tasks) through Exchange Web Services, acting as that person with no further rights.
 
-**Status: 0.1.0.** The documents below were written before the code and bind it; `CHANGELOG.md` says what each release holds.
+| Your mailbox lives in | Use |
+|---|---|
+| Exchange Server in your own data centre (2016, 2019, Subscription Edition) | **this server** (Exchange Web Services) |
+| Microsoft 365 / Exchange Online | [microsoft-365-mcp](https://github.com/Wide-Moat/microsoft-365-mcp) (Microsoft Graph); Microsoft turns EWS off in Exchange Online |
+| Both, during a migration | both, one per mailbox location |
+
+**Status: 0.1.1.** The documents below were written before the code and bind it; `CHANGELOG.md` says what each release holds.
 
 | Document | What it settles |
 |---|---|
