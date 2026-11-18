@@ -1,0 +1,190 @@
+{{- include "exchange-mcp.validate" . }}
+{{- $stage := include "exchange-mcp.stagesSecret" . }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "exchange-mcp.fullname" . }}
+  labels: {{- include "exchange-mcp.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  # Old and new pods never serve together: after a new key from CI they would hold different keys, and
+  # a client registered on one would be refused by the other until the rollout ended.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels: {{- include "exchange-mcp.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "exchange-mcp.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}{{ toYaml . | nindent 8 }}{{ end }}
+      annotations:
+        # a new key from CI restarts the pods, which stage it again
+        exchange-mcp/key-revision: {{ .Values.key.revision | quote }}
+        {{- with .Values.podAnnotations }}{{ toYaml . | nindent 8 }}{{ end }}
+    spec:
+      # the server never calls the Kubernetes API: no API token in the pod
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      {{- if $stage }}
+      initContainers:
+        # The only container that mounts the Secret. It copies the keys to a memory volume as files that
+        # the server's user alone may read; the server container never sees the Secret. The same image,
+        # so staging the keys needs no registry the server does not already need.
+        - name: stage-keys
+          image: {{ include "exchange-mcp.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["python", "-m", "exchange_mcp.keys.stage", "/secret", "/run/exchange-mcp"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              memory: 64Mi
+          volumeMounts:
+            - name: secret
+              mountPath: /secret
+              readOnly: true
+            - name: keys
+              mountPath: /run/exchange-mcp
+      {{- end }}
+      containers:
+        - name: server
+          image: {{ include "exchange-mcp.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          ports:
+            - name: http
+              containerPort: 8000
+          env:
+            - name: EXCHANGE_MCP_PUBLIC_URL
+              value: {{ .Values.publicUrl | quote }}
+            - name: EXCHANGE_MCP_EWS_URL
+              value: {{ .Values.exchange.ewsUrl | quote }}
+            - name: EXCHANGE_MCP_TIMEZONE
+              value: {{ .Values.exchange.timezone | quote }}
+            {{- if .Values.exchange.caBundle.configMap }}
+            - name: EXCHANGE_MCP_CA_BUNDLE
+              value: /etc/exchange-mcp/ca/{{ .Values.exchange.caBundle.key }}
+            {{- end }}
+            - name: EXCHANGE_MCP_AUTH_MODE
+              value: {{ .Values.auth.mode | quote }}
+            {{- if eq .Values.auth.mode "password" }}
+            - name: EXCHANGE_MCP_LOGIN_DOMAIN
+              value: {{ .Values.auth.password.loginDomain | quote }}
+            - name: EXCHANGE_MCP_LOGIN_FORMAT
+              value: {{ .Values.auth.password.loginFormat | quote }}
+            - name: EXCHANGE_MCP_REFRESH_HOURS
+              value: {{ .Values.auth.password.refreshHours | quote }}
+            {{- with .Values.auth.password.loginAlso }}
+            - name: EXCHANGE_MCP_LOGIN_ALSO
+              value: {{ join "," . | quote }}
+            {{- end }}
+            {{- else }}
+            - name: EXCHANGE_MCP_ADFS_ISSUER
+              value: {{ .Values.auth.adfs.issuer | quote }}
+            - name: EXCHANGE_MCP_ADFS_CLIENT_ID
+              value: {{ .Values.auth.adfs.clientId | quote }}
+            - name: EXCHANGE_MCP_ADFS_RESOURCE
+              value: {{ .Values.auth.adfs.resource | quote }}
+            - name: EXCHANGE_MCP_ADFS_KEY_ID
+              value: {{ .Values.auth.adfs.keyId | quote }}
+            - name: EXCHANGE_MCP_ADFS_KEY_FILE
+              value: /run/exchange-mcp/{{ .Values.auth.adfs.signingKeySecretKey }}
+            {{- end }}
+            - name: EXCHANGE_MCP_KEY_PROVIDER
+              value: {{ .Values.key.provider | quote }}
+            {{- if eq .Values.key.provider "file" }}
+            - name: EXCHANGE_MCP_KEY_FILE
+              value: /run/exchange-mcp/{{ .Values.key.secretKey }}
+            {{- else if eq .Values.key.provider "vault" }}
+            - name: EXCHANGE_MCP_VAULT_ADDR
+              value: {{ .Values.key.vault.addr | quote }}
+            - name: EXCHANGE_MCP_VAULT_KEY_NAME
+              value: {{ .Values.key.vault.keyName | quote }}
+            - name: EXCHANGE_MCP_VAULT_MOUNT
+              value: {{ .Values.key.vault.mount | quote }}
+            - name: EXCHANGE_MCP_VAULT_TOKEN_FILE
+              value: /run/exchange-mcp/{{ .Values.key.vault.tokenSecretKey }}
+            {{- end }}
+            {{- with .Values.areas }}
+            - name: EXCHANGE_MCP_AREAS
+              value: {{ join "," . | quote }}
+            {{- end }}
+            {{- with .Values.clientHosts }}
+            - name: EXCHANGE_MCP_CLIENT_HOSTS
+              value: {{ join "," . | quote }}
+            {{- end }}
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 30
+            failureThreshold: 3
+          resources: {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            {{- if $stage }}
+            - name: keys
+              mountPath: /run/exchange-mcp
+              readOnly: true
+            {{- end }}
+            {{- if .Values.exchange.caBundle.configMap }}
+            - name: ca
+              mountPath: /etc/exchange-mcp/ca
+              readOnly: true
+            {{- end }}
+      volumes:
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 16Mi
+        {{- if $stage }}
+        - name: keys
+          emptyDir:
+            medium: Memory  # tmpfs, gone with the pod; on the node's disk only if the node swaps
+            sizeLimit: 1Mi
+        - name: secret
+          secret:
+            secretName: {{ .Values.key.existingSecret }}
+            defaultMode: 0440  # root:fsGroup; the init container reads it through the pod's group
+        {{- end }}
+        {{- if .Values.exchange.caBundle.configMap }}
+        - name: ca
+          configMap:
+            name: {{ .Values.exchange.caBundle.configMap }}
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity: {{- toYaml . | nindent 8 }}
+      {{- end }}

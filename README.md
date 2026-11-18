@@ -9,7 +9,7 @@ calendar, contacts, tasks) through Exchange Web Services, acting as that person 
 | Microsoft 365 / Exchange Online | [microsoft-365-mcp](https://github.com/Wide-Moat/microsoft-365-mcp) (Microsoft Graph); Microsoft turns EWS off in Exchange Online |
 | Both, during a migration | both, one per mailbox location |
 
-Free and open source (Apache-2.0). **Status: 0.1.6**, tested against Exchange Server 2016 CU23; [`CHANGELOG.md`](CHANGELOG.md) lists what each release holds. We wrote the documents below before the code, and the code follows them.
+Free and open source (Apache-2.0). **Status: 0.1.7**, tested against Exchange Server 2016 CU23; [`CHANGELOG.md`](CHANGELOG.md) lists what each release holds. We wrote the documents below before the code, and the code follows them.
 
 | Document | What it settles |
 |---|---|
@@ -28,8 +28,22 @@ Free and open source (Apache-2.0). **Status: 0.1.6**, tested against Exchange Se
 | `adfs` (**preferred**) | Exchange 2019 CU13+ or Subscription Edition on every client-facing server; AD FS and Exchange configured by administrators | an AD FS token that reaches EWS only | **not yet**: unit tests against a fake AD FS only ([what to check](docs/live-findings.md#not-yet-run-live)) |
 | `password` | any Exchange with EWS | the person's directory password, sealed; no second factor ([risks](docs/auth-modes.md#the-risks-of-password-and-what-holds-each)) | yes, Exchange Server 2016 CU23 ([findings](docs/live-findings.md)) |
 
-The sealing key comes from Vault or OpenBao (recommended), or from a Kubernetes Secret generated at
-deploy time. Never from an environment variable.
+The sealing key comes from Vault or OpenBao (recommended), or from a Kubernetes Secret that CI
+generates at deploy time. Never from an environment variable.
+
+## Install
+
+```sh
+kid=$(scripts/new-sealing-key.sh exchange-mcp exchange-mcp-key)   # in the deploy job
+helm upgrade --install exchange-mcp oci://ghcr.io/wide-moat/charts/exchange-mcp -n exchange-mcp \
+  --set publicUrl=https://mcp.corp.example \
+  --set exchange.ewsUrl=https://mail.corp.example/EWS/Exchange.asmx \
+  --set auth.password.loginDomain=corp.example \
+  --set key.existingSecret=exchange-mcp-key --set key.revision="$kid"
+```
+
+[`charts/exchange-mcp/README.md`](charts/exchange-mcp/README.md) lists every value and how the key
+reaches the server.
 
 ## Tools
 

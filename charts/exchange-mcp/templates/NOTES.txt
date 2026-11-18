@@ -1,0 +1,5 @@
+exchange-mcp {{ .Chart.AppVersion }} serves {{ .Values.publicUrl }}/mcp
+Sign-in: {{ .Values.auth.mode }}; sealing key: {{ .Values.key.provider }}{{ if .Values.key.existingSecret }} (Secret {{ .Values.key.existingSecret }}, staged by the init container){{ end }}.
+{{- if eq .Values.key.provider "memory" }}
+Every restart signs everyone out: the key lives in this pod's memory only.
+{{- end }}

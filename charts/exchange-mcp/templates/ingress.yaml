@@ -1,0 +1,31 @@
+{{- if .Values.ingress.enabled }}
+{{- $host := .Values.publicUrl | trimPrefix "https://" | regexFind "^[^/:]+" }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "exchange-mcp.fullname" . }}
+  labels: {{- include "exchange-mcp.labels" . | nindent 4 }}
+  {{- with .Values.ingress.annotations }}
+  annotations: {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with .Values.ingress.className }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  {{- with .Values.ingress.tlsSecretName }}
+  tls:
+    - hosts: [{{ $host | quote }}]
+      secretName: {{ . }}
+  {{- end }}
+  rules:
+    - host: {{ $host | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "exchange-mcp.fullname" . }}
+                port:
+                  name: http
+{{- end }}

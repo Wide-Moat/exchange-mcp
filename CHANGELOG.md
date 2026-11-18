@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.7
+
+| Area | Added |
+|---|---|
+| Chart | `oci://ghcr.io/wide-moat/charts/exchange-mcp`: one Deployment and Service, optional Ingress, no ServiceAccount token, read-only root, all capabilities dropped |
+| Sealing key | CI writes a new key into the Secret with `scripts/new-sealing-key.sh`, which prints only the key id. An init container is the only one that mounts the Secret; it copies the key to a memory volume, 0400, owned by the server's user. A container restart keeps sessions; a new key signs everyone out once |
+| Process | on Linux the server marks itself not dumpable before reading any setting: a `kubectl exec` shell of the same user cannot read its memory or environment through `/proc` |
+| CI | the chart is linted, checked against the Kubernetes schemas, made to refuse missing values, and installed in a kind cluster where `scripts/chart-e2e.sh` checks each of the above |
+| Replicas | one replica is the supported count, and the chart refuses more: used sign-in codes and attempt counters live in the process, so a second pod would accept a sign-in code twice. The documents said any number |
+
 ## 0.1.6
 
 | Area | Fixed |
