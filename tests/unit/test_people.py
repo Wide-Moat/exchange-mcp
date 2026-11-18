@@ -185,7 +185,11 @@ async def test_a_contact_reads_its_name_title_and_phone_from_the_item(rt, ews, i
     [row] = r.data["items"]
     assert row["name"] == "Pat Friend" and row["id"] == "C1"
     assert row["title"] == "Buyer" and row["company"] == "Home Ltd" and row["phone"] == "+1 555 0101"
-    assert "C1" in ews.last("GetItem").xml()
+    sent = ews.last("GetItem")
+    assert "C1" in sent.xml()
+    asked = sent.root.xpath("//*[local-name()='IndexedFieldURI']/@FieldIndex")
+    assert set(asked) >= {"BusinessPhone", "MobilePhone"}  # asked by key: a whole PhoneNumbers comes back empty
+    assert not sent.root.xpath("//*[local-name()='FieldURI'][@FieldURI='contacts:PhoneNumbers']")
 
 
 async def test_a_contact_whose_item_cannot_be_read_is_an_error(rt, ews, invoke):
