@@ -19,7 +19,15 @@ from cryptography import x509
 from cryptography.hazmat.primitives import hashes
 from spnego.channel_bindings import GssChannelBindings
 
-from exchange_mcp.core.errors import ExchangeError
+
+class HandshakeFailed(Exception):
+    """The NTLM handshake stopped before the request was sent: no body and no password left this machine.
+    It carries which step failed and the HTTP status, for the log; never a header or a body."""
+
+    def __init__(self, step: str, status: int) -> None:
+        super().__init__(step)
+        self.step = step
+        self.status = status
 
 
 def _end_point_hash(der: bytes) -> bytes:
@@ -73,7 +81,7 @@ class Ntlm(httpx.Auth):
         # covers every leg of one context, so the context cannot change after the first message).
         response = yield self._empty(request)
         if response.status_code != 401:
-            raise ExchangeError("failed", code="NtlmNotChallenged", ref="ntlm")
+            raise HandshakeFailed("NtlmNotChallenged", response.status_code)
         cert = _peer_certificate(response)
         bindings = (
             GssChannelBindings(application_data=b"tls-server-end-point:" + _end_point_hash(cert)) if cert else None
@@ -91,7 +99,7 @@ class Ntlm(httpx.Auth):
         response = yield negotiate
         challenge = _challenge(response) if response.status_code == 401 else None
         if challenge is None:
-            raise ExchangeError("failed", code="NtlmNoChallenge", ref="ntlm")
+            raise HandshakeFailed("NtlmNoChallenge", response.status_code)
         request.headers["Authorization"] = "NTLM " + base64.b64encode(ctx.step(challenge) or b"").decode()
         request.headers["Connection"] = "close"
         yield request

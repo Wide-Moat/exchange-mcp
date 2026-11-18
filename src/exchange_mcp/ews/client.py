@@ -22,7 +22,7 @@ from lxml import etree
 
 from exchange_mcp.core.errors import ExchangeError
 from exchange_mcp.ews.soap import envelope, find, findall, parse, q, text
-from exchange_mcp.ews.transport import Ntlm
+from exchange_mcp.ews.transport import HandshakeFailed, Ntlm
 
 log = logging.getLogger("exchange_mcp.ews")
 
@@ -129,7 +129,7 @@ class Ews:
             return ExchangeError("uncertain", ref=ref) if write else ExchangeError("busy", seconds=30)
 
         try:
-            content, status = await self._post(payload)
+            content, status = await self._send(operation, payload, ref)
         except _TooLarge:
             log.warning("ews %s response over %s bytes ref=%s", operation, MAX_RESPONSE_BYTES, ref)
             if write:
@@ -191,6 +191,17 @@ class Ews:
         code = text(errors[0], "m:ResponseCode", "ErrorUnknown")
         log.info("ews %s %s ref=%s", operation, code, ref)
         raise _error(code, ref)
+
+    async def _send(self, operation: str, payload: bytes, ref: str) -> tuple[bytes, int]:
+        """A failed NTLM handshake is tried once more on a new connection. Its legs carry no body and no
+        password, so the second attempt cannot do anything twice; measured live, a handshake that failed
+        right after a restart went through on the next call."""
+        for attempt in (1, 2):
+            try:
+                return await self._post(payload)
+            except HandshakeFailed as h:
+                log.warning("ews %s ntlm %s http %s attempt %s ref=%s", operation, h.step, h.status, attempt, ref)
+        raise ExchangeError("handshake", ref=ref)
 
     async def _post(self, payload: bytes) -> tuple[bytes, int]:
         """The answer, read up to MAX_RESPONSE_BYTES: an attachment or a body cannot make this process

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.6
+
+| Area | Fixed |
+|---|---|
+| Sign-in | an NTLM handshake that Exchange did not answer with a challenge failed the call with "Exchange refused the request" and no next step (QA, fifth run: the first three calls after a restart). The handshake, which carries no body and no password, is tried once more on a new connection; if it fails again the error says nothing was sent and to try again or tell the administrator |
+| Logs | a failed handshake logs which step failed and the HTTP status beside the reference; before, the log said only `refused: failed` |
+
 ## 0.1.5
 
 | Area | Fixed |

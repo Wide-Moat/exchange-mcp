@@ -121,6 +121,23 @@ MUTATIONS = [
     ),
     ("the EWS allowlist", "ews/client.py", [("if operation not in ALLOWED:", "if False:")], "tests/unit/test_ews.py"),
     (
+        "NTLM: a failed handshake is tried once more",
+        "ews/client.py",
+        [("        for attempt in (1, 2):", "        for attempt in (1,):")],
+        "tests/unit/test_ews.py",
+    ),
+    (
+        "NTLM: a failed handshake names the next step, not a raw code",
+        "ews/client.py",
+        [
+            (
+                '        raise ExchangeError("handshake", ref=ref)',
+                '        raise ExchangeError("failed", code="ntlm", ref=ref)',
+            )
+        ],
+        "tests/unit/test_ews.py",
+    ),
+    (
         "errors inside HTTP 200",
         "ews/client.py",
         [('errors = [m for m in checked if m.get("ResponseClass") == "Error"]', "errors = []")],
@@ -329,8 +346,8 @@ MUTATIONS = [
         "ews/transport.py",
         [
             (
-                "        if response.status_code != 401:\n            raise ExchangeError",
-                "        if False:\n            raise ExchangeError",
+                "        if response.status_code != 401:\n            raise HandshakeFailed",
+                "        if False:\n            raise HandshakeFailed",
             )
         ],
         "tests/unit/test_ews.py",
