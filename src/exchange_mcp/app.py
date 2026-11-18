@@ -1,5 +1,6 @@
-"""The process: one Starlette app with the MCP endpoint, OAuth, the sign-in page and file links. It keeps
-no state between requests (`keys.seal`), so replicas sharing the sealing key serve the same people.
+"""The process: one Starlette app with the MCP endpoint, OAuth, the sign-in page and file links. Tokens
+are sealed (`keys.seal`), so a restart with the same key keeps everyone signed in. Used sign-in codes,
+attempt counters and the send bucket live in this process, so one replica is the supported count.
 """
 
 from __future__ import annotations
@@ -19,6 +20,7 @@ from starlette.responses import JSONResponse, Response
 
 from exchange_mcp.config import Settings
 from exchange_mcp.core import context
+from exchange_mcp.keys.harden import non_dumpable
 from exchange_mcp.keys.providers import make_sealer
 from exchange_mcp.keys.seal import Sealer
 from exchange_mcp.links import routes as link_routes
@@ -119,6 +121,9 @@ def main() -> None:
     from exchange_mcp.observability import configure
 
     configure()
+    # before any setting or key is read (keys/harden.py)
+    if not non_dumpable():
+        log.warning("this system cannot hide the process memory from its own user; run it on Linux in production")
     settings = Settings.from_env()
     app, _, _ = build(settings)
     log.info("starting mode=%s keys=%s", settings.auth_mode, settings.key_provider)

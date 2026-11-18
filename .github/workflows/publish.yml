@@ -111,9 +111,73 @@ jobs:
           echo "what an installation should pin: ghcr.io/wide-moat/exchange-mcp@${digest}"
           echo "digest=${digest}" >> "$GITHUB_OUTPUT"
 
-  release:
+  # The chart, on a tag only: oci://ghcr.io/wide-moat/charts/exchange-mcp:<x.y.z>, after the image it
+  # points at was scanned and pushed.
+  chart:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: image
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # validate.yml (chart lint, schemas, refusals, the kind install) runs on the push to main, not on
+      # the tag; the chart is published only for a commit whose validate run passed.
+      - name: validate passed on this commit
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          # Only the push to main counts, and only if its own chart job ran and passed: a run whose chart
+          # job was skipped (a draft pull request) concludes success too.
+          for _ in $(seq 1 80); do
+            ids=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow validate.yml --commit "$SHA" --event push \
+              --json databaseId,status,conclusion \
+              --jq '.[] | select(.status == "completed" and .conclusion == "success") | .databaseId')
+            pending=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow validate.yml --commit "$SHA" --event push \
+              --json status --jq '[.[] | select(.status != "completed")] | length')
+            for id in $ids; do
+              chart=$(gh run view "$id" --repo "$GITHUB_REPOSITORY" --json jobs \
+                --jq '[.jobs[] | select(.name == "chart") | .conclusion] | first // "absent"')
+              echo "validate run ${id} on ${SHA}: chart job ${chart}"
+              if [ "$chart" = success ]; then exit 0; fi
+            done
+            done_runs=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow validate.yml --commit "$SHA" \
+              --event push --json status --jq '[.[] | select(.status == "completed")] | length')
+            if [ "$done_runs" -gt 0 ] && [ "$pending" -eq 0 ]; then
+              echo "no passing validate run on this commit passed its chart job: the chart is not published"; exit 1
+            fi
+            sleep 30
+          done
+          echo "no finished validate run on this commit after 40 minutes"; exit 1
+      - name: package and push
+        shell: bash
+        env:
+          TAG: ${{ github.ref_name }}
+          ACTOR: ${{ github.actor }}
+          TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          version="${TAG#v}"
+          meta=charts/exchange-mcp/Chart.yaml
+          grep -qx "version: ${version}" "$meta" || { echo "Chart.yaml is not ${version}"; exit 1; }
+          grep -qx "appVersion: \"${version}\"" "$meta" || { echo "appVersion is not ${version}"; exit 1; }
+          helm package charts/exchange-mcp --destination /tmp/chart
+          pkg="/tmp/chart/exchange-mcp-${version}.tgz"
+          test -s "$pkg" || { echo "no package ${pkg}"; exit 1; }
+          echo "$TOKEN" | helm registry login ghcr.io -u "$ACTOR" --password-stdin
+          helm push "$pkg" oci://ghcr.io/wide-moat/charts
+          helm show chart oci://ghcr.io/wide-moat/charts/exchange-mcp --version "$version" \
+            | grep -qx "version: ${version}"
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [image, chart]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -133,6 +197,11 @@ jobs:
           test -s notes.md || { echo "CHANGELOG.md has no section ## ${version}"; exit 1; }
           test -n "$DIGEST" || { echo "the image job returned no digest"; exit 1; }
           printf '\n## Image\n\n`ghcr.io/wide-moat/exchange-mcp@%s`\n' "$DIGEST" >> notes.md
+          chart="oci://ghcr.io/wide-moat/charts/exchange-mcp"
+          readme="https://github.com/wide-moat/exchange-mcp/blob/${TAG}/charts/exchange-mcp/README.md"
+          printf '\n## Chart\n\n`helm upgrade --install exchange-mcp %s --version %s -f values.yaml`\n\n' \
+            "$chart" "$version" >> notes.md
+          printf 'values.yaml and the key Secret: [chart README](%s).\n' "$readme" >> notes.md
       - name: create the release
         env:
           GH_TOKEN: ${{ github.token }}

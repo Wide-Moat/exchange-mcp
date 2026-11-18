@@ -30,7 +30,7 @@ Exchange and AD FS need nothing beyond the steps above. The operator sets:
 | `EXCHANGE_MCP_LOGIN_FORMAT` | `upn` or `down_level`: the form Exchange accepts for NTLM |
 | `EXCHANGE_MCP_LOGIN_DOMAIN` | the UPN suffix (`upn`) or the NetBIOS domain (`down_level`) |
 | `EXCHANGE_MCP_LOGIN_ALSO` | the organisation's other spelling, exactly: the UPN suffix in `down_level`, the NetBIOS name in `upn` (comma-separated) |
-| `EXCHANGE_MCP_ATTEMPTS_PER_LOGIN` | below the directory's lockout threshold divided by the number of replicas |
+| `EXCHANGE_MCP_ATTEMPTS_PER_LOGIN` | below the directory's lockout threshold (one replica: the count is kept in the process) |
 
 Read the risks in [auth-modes](auth-modes.md#the-risks-of-password-and-what-holds-each) with the security
 team before turning this mode on.

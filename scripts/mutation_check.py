@@ -121,6 +121,24 @@ MUTATIONS = [
     ),
     ("the EWS allowlist", "ews/client.py", [("if operation not in ALLOWED:", "if False:")], "tests/unit/test_ews.py"),
     (
+        "staged keys are readable by the server's user only",
+        "keys/stage.py",
+        [("            os.fchmod(fd, 0o400)", "            os.fchmod(fd, 0o440)")],
+        "tests/unit/test_stage.py",
+    ),
+    (
+        "an empty Secret stops the pod",
+        "keys/stage.py",
+        [("    if n == 0:", "    if False:")],
+        "tests/unit/test_stage.py",
+    ),
+    (
+        "the process hides its memory before reading settings",
+        "app.py",
+        [("    if not non_dumpable():", "    if False:")],
+        "tests/unit/test_harden.py",
+    ),
+    (
         "NTLM: a failed handshake is tried once more",
         "ews/client.py",
         [("        for attempt in (1, 2):", "        for attempt in (1,):")],

@@ -252,6 +252,83 @@ jobs:
       - name: the image builds
         run: docker build -t exchange-mcp:ci .
 
+  # The chart renders, refuses what it must, and in a real cluster delivers the key the way it promises:
+  # the Secret in the init container only, no key in the environment, the key kept across a container
+  # restart and replaced by a new one from CI (scripts/chart-e2e.sh counts its own checks).
+  chart:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: chart, image and package carry one version
+        run: |
+          set -euo pipefail
+          py=$(sed -n 's/^version = "\(.*\)"$/\1/p' pyproject.toml)
+          chart=$(sed -n 's/^version: //p' charts/exchange-mcp/Chart.yaml)
+          app=$(sed -n 's/^appVersion: "\(.*\)"$/\1/p' charts/exchange-mcp/Chart.yaml)
+          echo "pyproject ${py}, chart ${chart}, appVersion ${app}"
+          test -n "$py" && test "$py" = "$chart" && test "$py" = "$app"
+      - name: tools
+        run: |
+          set -euo pipefail
+          helm version --short && kind version && kubectl version --client=true | head -1
+          curl -fsSL --retry 3 -o /tmp/kubeconform.tar.gz \
+            https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz
+          echo "95f14e87aa28c09d5941f11bd024c1d02fdc0303ccaa23f61cef67bc92619d73  /tmp/kubeconform.tar.gz" \
+            | sha256sum -c -
+          tar -xzf /tmp/kubeconform.tar.gz -C /tmp kubeconform
+      - name: renders valid manifests, and refuses what it must
+        run: |
+          set -euo pipefail
+          ok=(--set publicUrl=https://mcp.example.com --set exchange.ewsUrl=https://mail.example.com/EWS/Exchange.asmx
+              --set auth.password.loginDomain=corp.example --set key.existingSecret=exchange-mcp-key)
+          helm lint --strict charts/exchange-mcp "${ok[@]}"
+          helm template t charts/exchange-mcp "${ok[@]}" > rendered.yaml
+          /tmp/kubeconform -strict -summary rendered.yaml
+          grep -q 'name: stage-keys' rendered.yaml
+          # the optional Ingress renders, is valid, and takes its host from publicUrl
+          helm template t charts/exchange-mcp "${ok[@]}" --set ingress.enabled=true --set ingress.className=nginx \
+            --set ingress.tlsSecretName=mcp-tls > ingress.yaml
+          /tmp/kubeconform -strict -summary ingress.yaml
+          test "$(grep -c '^kind: Ingress$' ingress.yaml)" = 1
+          grep -q 'host: "mcp.example.com"' ingress.yaml
+          refuses() {
+            want="$1"; shift
+            if out=$(helm template t charts/exchange-mcp "$@" 2>&1); then echo "rendered: $*"; exit 1; fi
+            grep -qF "$want" <<<"$out" || { echo "refused for another reason: $out"; exit 1; }
+            echo "refused as expected: $want"
+          }
+          refuses "publicUrl is required"
+          refuses "key.existingSecret is required" "${ok[@]}" --set key.existingSecret=
+          refuses "replicaCount must be 1" "${ok[@]}" --set replicaCount=2
+      - name: build the image for the cluster
+        run: docker build -t exchange-mcp:e2e .
+      - name: the image reports the chart's version
+        run: |
+          set -euo pipefail
+          got=$(docker run --rm --entrypoint python exchange-mcp:e2e \
+            -c 'import exchange_mcp; print(exchange_mcp.__version__)')
+          want=$(sed -n 's/^appVersion: "\(.*\)"$/\1/p' charts/exchange-mcp/Chart.yaml)
+          echo "image ${got}, chart appVersion ${want}"
+          test -n "$want" && test "$got" = "$want"
+      - name: a cluster
+        run: |
+          set -euo pipefail
+          kind create cluster --name e2e --wait 120s
+          kind load docker-image exchange-mcp:e2e --name e2e
+      - name: the chart in the cluster
+        run: IMAGE=exchange-mcp:e2e scripts/chart-e2e.sh
+      - name: what the cluster saw
+        if: failure()
+        run: |
+          kubectl -n exchange-mcp-e2e get pods -o wide || true
+          kubectl -n exchange-mcp-e2e describe pods | tail -60 || true
+          kubectl -n exchange-mcp-e2e logs -l app.kubernetes.io/instance=e2e --all-containers --tail=80 || true
+
   probe:
     # The built image starts as a non-root user, refuses a key in the environment, and serves OAuth
     # metadata with a key file it generated the way a deployment would.
@@ -291,6 +368,15 @@ jobs:
             | grep -q '"issuer":"https://mcp.example.com/\?"'
           want="$(docker inspect -f '{{.Config.User}}' exchange-mcp:ci)"; got="$(docker exec mcp id -u)"
           echo "image user ${want}, running as ${got}"; test "$got" = "$want" && test "$got" != 0
+      - name: a shell in the container cannot read the server's memory or environment
+        run: |
+          set -euo pipefail
+          # kubectl exec opens a shell as the image user; the server marked itself not dumpable, so /proc
+          # of PID 1 belongs to root. Only an exact refusal passes: a dead container or a missing file
+          # gives another answer. maps, not mem: mem at offset 0 fails on any process.
+          got=$(docker exec -i mcp python - < scripts/proc-probe.py)
+          echo "own environ, PID 1 environ, PID 1 maps: ${got}"
+          test "$got" = "READ DENIED DENIED"
       - name: server log
         if: always()
         run: docker logs mcp 2>&1 | tail -50 || true

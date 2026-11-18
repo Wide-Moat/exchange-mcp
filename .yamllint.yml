@@ -1,5 +1,9 @@
 extends: default
 
+# Helm templates are Go templates that render to YAML; helm lint and kubeconform check what they render.
+ignore: |
+  charts/*/templates/
+
 rules:
   line-length:
     max: 120

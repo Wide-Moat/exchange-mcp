@@ -21,9 +21,10 @@ Exchange EWS  https://<operator-configured host>/EWS/Exchange.asmx     (Autodisc
 AD FS         https://<operator-configured host>/adfs/oauth2/...       (adfs mode only)
 ```
 
-Stateless: two replicas with the same key serve the same person. Per-replica state is limited to
-what is safe to lose: the sign-in attempt counters, the send bucket and the used-code set. The code documents each
-of these where it lives, with what a second replica changes.
+No session store: tokens are sealed, so a restarted process with the same key serves the same person.
+Three things live in the process and are lost on restart: the sign-in attempt counters, the send bucket
+and the used-code set. They are also why one replica is the only supported count: a second replica would
+accept a sign-in code twice and double the sign-in attempts before a lockout. The chart refuses more.
 
 ## Request path
 

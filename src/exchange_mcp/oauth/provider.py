@@ -67,6 +67,8 @@ class Provider:
         self._renew = renew  # adfs: refresh the AD FS token inside the credential
         self._client_hosts = client_hosts
         self._clock = clock
+        # In this process only: a second replica would not see a code used here (docs/architecture.md),
+        # which is why one replica is the supported count.
         self._used_codes: dict[str, float] = {}
 
     # ---------------------------------------------------------------- clients
