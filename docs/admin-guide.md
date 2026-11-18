@@ -22,7 +22,7 @@ Set-RemoteDomain Default -AutoForwardEnabled $false
 
 ## `password` mode
 
-Nothing more in Exchange or AD FS. The operator sets:
+Exchange and AD FS need nothing beyond the steps above. The operator sets:
 
 | Setting | Value |
 |---|---|
@@ -64,7 +64,7 @@ front-end IIS logs for successful Bearer requests over a week, and remove it if 
 
 ### 1. Modern Auth on EWS only (Exchange)
 
-Before Exchange trusts AD FS. Otherwise Outlook and phones may switch to AD FS sign-in when step 3 turns
+Do this before Exchange trusts AD FS, because Outlook and phones may switch to AD FS sign-in when step 3 turns
 Modern Auth on for the organisation. Carry over any `BlockLegacyAuth*` the current default policy has.
 
 ```powershell

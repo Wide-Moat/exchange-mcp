@@ -36,7 +36,7 @@ moving between an on-premises mailbox and a cloud one sees the same tools.
    *Violation:* an `action: str`; an enum behind a `$ref`.
 4. **No prefix.** The gateway already namespaces tools. *Violation:* `exchange_`, `ews_`, `mcp_`
    in a tool name.
-5. **Descriptions read like a man page and say when to call the tool**, not only what it does. At
+5. **Descriptions read like a man page and say when to call the tool** as well as what it does. At
    least three sentences; irreversible tools say they are irreversible. *Violation:* a description
    that restates the tool name.
 6. **Flat arguments.** Scalars and lists of scalars. Every argument whose name is not
@@ -54,7 +54,7 @@ moving between an on-premises mailbox and a cloud one sees the same tools.
    cap; silent truncation.
 10. **Bytes never enter the context.** Attachments and large HTML bodies move through short-lived
     signed links the agent's sandbox uses with `curl`. *Violation:* base64 in a tool result.
-11. **Errors are errors.** A failed call sets `isError` and its text names the next step and what
+11. **A failure is an error.** A failed call sets `isError` and its text names the next step and what
     did not happen. *Violation:* `{"error": …}` inside a success; an EWS `ResponseCode` shown raw.
 12. **Annotations describe actual behaviour.** `readOnlyHint`, `destructiveHint` (by the MCP spec
     it means *changes existing state*), `idempotentHint`, `openWorldHint` (other people are
@@ -63,9 +63,9 @@ moving between an on-premises mailbox and a cloud one sees the same tools.
     areas; an installation turns any of them off with one line, and an off area is not published
     at all. `account` (`get_connection`) is always on: it is how a person learns why anything else
     fails. *Violation:* a published tool that answers "disabled"; a tool that belongs to no area.
-14. **Every change is weighed** with a real tokenizer: the default catalogue stays under
-    **12,000 tokens**, no area over 3,500, no tool over 600. Growing past that is a recorded
-    decision, not an edit.
+14. **We weigh every change** with a real tokenizer: the default catalogue stays under
+    **12,000 tokens**, no area over 3,500, no tool over 600. Growing past that needs a recorded
+    decision.
 
 ## II. Acting as one person
 
@@ -79,7 +79,7 @@ moving between an on-premises mailbox and a cloud one sees the same tools.
     other than the configured one.
 17. **Rights come from Exchange, not from us.** We never widen what the person can do and never
     pretend to narrow it with a check Exchange would not enforce. Where Exchange refuses, we say so.
-18. **Two sign-in modes, named for what they are.** `adfs` (OAuth through AD FS, Exchange 2019 CU13
+18. **Two sign-in modes.** `adfs` (OAuth through AD FS, Exchange 2019 CU13
     or later, or Subscription Edition) is the safer mode: this server never sees the
     person's password, and the token it holds reaches EWS only. `password` (NTLM) exists for
     Exchange organisations where `adfs` is not available, and its costs are written down in

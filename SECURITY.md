@@ -7,9 +7,9 @@ a public issue. Say what an attacker can do, against which version or commit, an
 it.
 
 What counts: anything that lets a model, a message or the sign-in page act beyond the one
-signed-in person; opens a credential from a token without the key; reach a host other than the
-configured Exchange and AD FS; send without the two-step send; or puts a password, a token or mail
-content into a log.
+signed-in person, open a credential from a token without the key, reach a host other than the
+configured Exchange and AD FS, send mail without the two-step send, or put a password, a token or
+mail content into a log.
 
 ## What this server holds
 

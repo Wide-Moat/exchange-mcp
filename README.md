@@ -9,7 +9,7 @@ calendar, contacts, tasks) through Exchange Web Services, acting as that person 
 | Microsoft 365 / Exchange Online | [microsoft-365-mcp](https://github.com/Wide-Moat/microsoft-365-mcp) (Microsoft Graph); Microsoft turns EWS off in Exchange Online |
 | Both, during a migration | both, one per mailbox location |
 
-**Status: 0.1.1.** The documents below were written before the code and bind it; `CHANGELOG.md` says what each release holds.
+Free and open source (Apache-2.0). **Status: 0.1.1**, tested against Exchange Server 2016 CU23; [`CHANGELOG.md`](CHANGELOG.md) lists what each release holds. We wrote the documents below before the code, and the code follows them.
 
 | Document | What it settles |
 |---|---|
@@ -17,6 +17,7 @@ calendar, contacts, tasks) through Exchange Web Services, acting as that person 
 | [docs/requirements.md](docs/requirements.md) | the 21 tools, the EWS operations behind them, every refusal and its test |
 | [docs/auth-modes.md](docs/auth-modes.md) | the two sign-in modes, their risks, and where the sealing key lives |
 | [docs/architecture.md](docs/architecture.md) | components, request path, configuration, threats |
+| [docs/admin-guide.md](docs/admin-guide.md) | how to deploy it and what to ask your Exchange administrators |
 | [docs/code-review.md](docs/code-review.md) | what blocks a merge |
 | [SECURITY.md](SECURITY.md) | reporting, and what a deployment must provide |
 

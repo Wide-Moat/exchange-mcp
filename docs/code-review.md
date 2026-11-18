@@ -2,7 +2,7 @@
 
 What a reviewer (a person, or `ocr review` driven by [`.opencodereview/rule.json`](../.opencodereview/rule.json))
 looks for in every change. Each item points at the [manifesto](../MANIFESTO.md) rule it protects.
-A finding is fixed, or rejected with its reason written in the review. Nobody drops one silently.
+A finding is fixed, or rejected with its reason written in the review. No finding is dropped without one.
 
 ## Blocking
 
