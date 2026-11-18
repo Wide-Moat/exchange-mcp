@@ -78,6 +78,8 @@ def test_product_code_names_no_installation():
     allowed = ("example.com", "example.org", "corp.example", "microsoft.com", "xmlsoap.org", "python.org", "claude.com")
     found = []
     for path in files:
+        if path.name == "test_purity_check.py":
+            continue  # its fixtures are leaks on purpose: the gate must reject them
         # the product's own public repositories may be linked; any other GitHub path is a finding
         text = re.sub(r"github\.com/wide-moat/[a-z0-9-]+", "", path.read_text().lower())
         for host in re.findall(r"\b(?:[a-z0-9-]+\.)+(?:ru|com|net|org|io|ai)\b", text):

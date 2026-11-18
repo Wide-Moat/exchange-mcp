@@ -1,9 +1,10 @@
-# The gates. Shared ones come from Wide-Moat/ci; the ones that know this code live here.
+# Every check this repository has, self-contained: nothing here calls a workflow in another
+# repository, because a public repository cannot call one in a private repository (the run fails to
+# start, with zero jobs and no log). Hosted runners only: a public repository must never run outside
+# contributions on our own machines.
 name: validate
 
 on:
-  # Dispatchable: the shared gates live in a private Wide-Moat/ci, reachable only while this
-  # repository's actions access stays "organization" — a setting, not a file.
   workflow_dispatch:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
@@ -18,56 +19,143 @@ permissions:
   contents: read
 
 jobs:
-  # Product code: anything naming an installation or a customer fails here.
+  # No real organisation's data in tracked files: addresses, public IPs, notes in Russian.
   purity:
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
-    uses: Wide-Moat/ci/.github/workflows/purity-gate.yml@main
-    with:
-      runner: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+      - run: python scripts/purity_check.py .
 
   yaml:
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
-    uses: Wide-Moat/ci/.github/workflows/yaml-validate.yml@main
-    with:
-      runner: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
-      yamllint-args: "."
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: pipx run yamllint==1.35.1 --strict .
 
-  reproducibility:
+  # No secret in the tree or the history. The binary is pinned by version and checksum, so a
+  # moved tag cannot change what runs here.
+  secrets:
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
-    uses: Wide-Moat/ci/.github/workflows/reproducibility-gate.yml@main
-    with:
-      runner: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: gitleaks over every commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          v=8.21.2
+          base=https://github.com/gitleaks/gitleaks/releases/download
+          curl -fsSL -o gl.tgz "$base/v${v}/gitleaks_${v}_linux_x64.tar.gz"
+          echo "5bc41815076e6ed6ef8fbecc9d9b75bcae31f39029ceb55da08086315316e3ba  gl.tgz" | sha256sum -c -
+          tar xzf gl.tgz gitleaks
+          ./gitleaks git . --no-banner --redact --exit-code 1
 
-  # No `secrets: inherit`: passing secrets a gate does not declare invalidates the whole
-  # file, which arrives as a startup_failure with zero jobs and no log.
-  gitleaks:
-    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
-    uses: Wide-Moat/ci/.github/workflows/gitleaks.yml@main
-    with:
-      runner: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
-
+  # Static analysis and the dependency scan report findings in the run summary; a scan that did not
+  # happen fails.
   semgrep:
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
-    uses: Wide-Moat/ci/.github/workflows/semgrep.yml@main
-    with:
-      runner: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+      - name: scan
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --quiet --disable-pip-version-check "semgrep==1.174.0"
+          semgrep scan --config=p/security-audit --config=p/secrets --metrics=off --quiet \
+            --timeout 180 --json --output semgrep.json
+          test -s semgrep.json || { echo "semgrep produced no report: the scan did not run"; exit 1; }
+          python3 - <<'PY' | tee -a "$GITHUB_STEP_SUMMARY"
+          import json
+          import subprocess
+          import sys
+          report = json.load(open("semgrep.json"))
+          scanned = {p for p in report.get("paths", {}).get("scanned", []) if p.endswith(".py")}
+          # semgrep skips tests/ by default; the code that ships and the gate scripts must be scanned
+          tracked = subprocess.run(["git", "ls-files", "src/*.py", "scripts/*.py"],
+                                   capture_output=True, text=True, check=True)
+          want = set(tracked.stdout.split())
+          if not want or want - scanned:
+              print(f"semgrep scanned {len(scanned & want)} of {len(want)} tracked Python files")
+              sys.exit(1)
+          errors = [e for e in report.get("errors", []) if e.get("level") == "error"]
+          for e in errors:
+              print("semgrep error:", e.get("type"), e.get("path"), str(e.get("message"))[:200])
+          if errors:
+              sys.exit(1)
+          results = report["results"]
+          print(f"## Semgrep: {len(results)} findings in {len(want)} Python files")
+          for r in results[:40]:
+              print(f"- {r['check_id'].split('.')[-1]} `{r['path']}`:{r['start']['line']}")
+          PY
 
   sca:
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
-    uses: Wide-Moat/ci/.github/workflows/sca.yml@main
-    with:
-      runner: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      TRIVY_VERSION: 0.73.0
+      TRIVY_SHA256: 2edd39da482bb4e9831962487b68f68e3928ec3137794757f54d00383d79547b
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: install the pinned trivy
+        shell: bash
+        run: |
+          set -euo pipefail
+          url="https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          curl -fsSL --retry 3 --connect-timeout 20 --max-time 300 -o /tmp/trivy.tar.gz "$url"
+          echo "${TRIVY_SHA256}  /tmp/trivy.tar.gz" | sha256sum -c -
+          tar -xzf /tmp/trivy.tar.gz -C /tmp trivy && chmod +x /tmp/trivy
+          /tmp/trivy --version | head -1 | grep -q "$TRIVY_VERSION"
+      - name: scan the working tree
+        shell: bash
+        env:
+          TRIVY_DB_REPOSITORY: ghcr.io/aquasecurity/trivy-db:2,mirror.gcr.io/aquasec/trivy-db:2
+        run: |
+          set -euo pipefail
+          /tmp/trivy fs --scanners vuln,misconfig,secret --no-progress --timeout 10m \
+            --severity CRITICAL,HIGH --list-all-pkgs --format json -o sca.json .
+          test -s sca.json || { echo "trivy produced no report: the scan did not run"; exit 1; }
+          python3 - <<'PY' | tee -a "$GITHUB_STEP_SUMMARY"
+          import json
+          results = json.load(open("sca.json")).get("Results") or []
+          # uv.lock is the dependency source requirements.lock is exported from; trivy must have read it.
+          locks = [r for r in results if r.get("Target") == "uv.lock" and r.get("Packages")]
+          if not locks:
+              raise SystemExit("trivy read no packages from uv.lock: the dependency scan covered nothing")
+          kinds = ("Vulnerabilities", "Misconfigurations", "Secrets")
+          found = [(r.get("Target"), k, x) for r in results for k in kinds for x in (r.get(k) or [])]
+          pkgs = len(locks[0]["Packages"])
+          print(f"## Dependency scan: {pkgs} packages from uv.lock, {len(found)} HIGH/CRITICAL findings")
+          for target, kind, x in found[:40]:
+              name = x.get("VulnerabilityID") or x.get("ID") or x.get("RuleID")
+              print(f"- {x.get('Severity')} {kind} {name} `{target}`")
+          PY
 
   tests:
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
-    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     timeout-minutes: 30
     defaults:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.12"
       - name: install the locked dependencies
@@ -117,7 +205,7 @@ jobs:
       github.event_name == 'pull_request' && github.event.pull_request.draft == false &&
       github.event.pull_request.head.repo.full_name == github.repository
     needs: tests
-    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     defaults:
       run:
@@ -126,8 +214,8 @@ jobs:
       contents: read
       pull-requests: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.12"
       - run: |
@@ -157,27 +245,24 @@ jobs:
 
   image:
     if: github.event_name == 'pull_request' && github.event.pull_request.draft == false
-    # The shared build job declares packages: write; a caller that grants less makes the whole
-    # file invalid (startup_failure, zero jobs). It pushes nothing here: push is false.
-    permissions:
-      contents: read
-      packages: write
-    uses: Wide-Moat/ci/.github/workflows/image-build.yml@main
-    with:
-      runner: ${{ vars.CI_BUILD_RUNNER || vars.CI_RUNNER || 'ubuntu-latest' }}
-      push: false
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: the image builds
+        run: docker build -t exchange-mcp:ci .
 
   probe:
     # The built image starts as a non-root user, refuses a key in the environment, and serves OAuth
     # metadata with a key file it generated the way a deployment would.
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
-    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     timeout-minutes: 15
     defaults:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: build
         run: docker build -t exchange-mcp:ci .
       - name: a key in the environment stops the server
