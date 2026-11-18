@@ -23,6 +23,14 @@ answers in the measured shape. No host, address or person of the installation go
 | Online archive filled by an archive policy | 2016 CU23 | mail sits in a top-level copy of the mailbox's folders under their localized names; the distinguished `archiveinbox` is empty | tests/unit/test_qa_mail.py::test_the_archive_inbox_is_the_copy_of_the_mailbox_tree |
 | `FindItem` on tasks with a restriction on `task:Status` | 2016 CU23 | `ErrorInvalidValueForProperty`; `task:IsComplete` works instead | tests/unit/test_tasks.py::test_list_tasks_filters_open_tasks |
 
+## Not yet run live
+
+| What | Why it is open | Unit tests that stand in |
+|---|---|---|
+| `adfs` mode, end to end: redirect to AD FS, `private_key_jwt` accepted by the token endpoint, the Bearer token accepted by EWS, refresh | needs Exchange 2019 CU13+ or Subscription Edition and an AD FS configured for it; no such installation was available | tests/unit/test_adfs.py (7 tests, fake AD FS) |
+| `respond_to_event` | needs an invitation from another person | tests/unit/test_calendar.py::test_respond_sends_the_answer |
+| Times in the header Exchange quotes into a reply or forward, in the person's zone | needs a sent reply | tests/unit/test_calendar.py::test_requests_carry_the_persons_time_zone |
+
 ## Verify on the first live run
 
 | Question | Why it matters |

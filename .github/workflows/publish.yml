@@ -1,4 +1,4 @@
-# Publish the image from main and from release tags, then scan exactly what was pushed. A tag v<x.y.z>
+# Publish the image from main and from release tags, scanned before it is pushed. A tag v<x.y.z>
 # also gets a GitHub Release whose notes are that version's CHANGELOG section and the digest to pin.
 name: publish
 
@@ -19,72 +19,107 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Built here rather than by a shared workflow: a public repository cannot call one in a private
+  # repository. Tags as before: sha-<commit> and the branch on main; <x.y.z>, <x.y> and latest on a tag.
   image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: read
       packages: write
-    uses: Wide-Moat/ci/.github/workflows/image-build.yml@main
-    with:
-      runner: ${{ vars.CI_BUILD_RUNNER || vars.CI_RUNNER || 'ubuntu-latest' }}
-      image: ghcr.io/wide-moat/exchange-mcp
-      push: true
-
-  trivy:
-    needs: image
-    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
-    timeout-minutes: 20
-    defaults:
-      run:
-        shell: bash
-    permissions:
-      contents: read
-      packages: read
-    env:
-      TRIVY_VERSION: 0.73.0
-      IMAGE: ghcr.io/wide-moat/exchange-mcp@${{ needs.image.outputs.digest }}
+    outputs:
+      digest: ${{ steps.push.outputs.digest }}
     steps:
-      - name: install the pinned trivy
-        run: |
-          set -uo pipefail
-          url="https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
-          curl -fsSL --retry 3 --connect-timeout 20 --max-time 300 -o /tmp/trivy.tar.gz "$url"
-          size=$(wc -c < /tmp/trivy.tar.gz)
-          [ "$size" -gt 10000000 ] || { echo "archive is only ${size} bytes"; exit 1; }
-          tar -xzf /tmp/trivy.tar.gz -C /tmp trivy && chmod +x /tmp/trivy
-          /tmp/trivy --version | head -1 | grep -q "$TRIVY_VERSION"
-      - name: no HIGH or CRITICAL vulnerability with a fix in the pushed image
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - id: meta
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5.10.0
+        with:
+          images: ghcr.io/wide-moat/exchange-mcp
+          tags: |
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha
+      - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: build
+        shell: bash
         env:
-          TRIVY_USERNAME: ${{ github.actor }}
-          TRIVY_PASSWORD: ${{ github.token }}
+          TAGS: ${{ steps.meta.outputs.tags }}
+          LABELS: ${{ steps.meta.outputs.labels }}
+        run: |
+          set -euo pipefail
+          tags=()
+          while IFS= read -r t; do if [ -n "$t" ]; then tags+=("$t"); fi; done <<< "$TAGS"
+          [ "${#tags[@]}" -gt 0 ] || { echo "metadata gave no tags: nothing would be pushed"; exit 1; }
+          args=(-t exchange-mcp:candidate)
+          for t in "${tags[@]}"; do args+=(-t "$t"); done
+          while IFS= read -r l; do if [ -n "$l" ]; then args+=(--label "$l"); fi; done <<< "$LABELS"
+          echo "building ${#tags[@]} tags: ${tags[*]}"
+          docker build "${args[@]}" .
+      - name: install the pinned trivy
+        shell: bash
+        env:
+          TRIVY_VERSION: 0.73.0
+          TRIVY_SHA256: 2edd39da482bb4e9831962487b68f68e3928ec3137794757f54d00383d79547b
+        run: |
+          set -euo pipefail
+          base="https://github.com/aquasecurity/trivy/releases/download"
+          curl -fsSL --retry 3 --connect-timeout 20 --max-time 300 -o /tmp/trivy.tar.gz \
+            "${base}/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          echo "${TRIVY_SHA256}  /tmp/trivy.tar.gz" | sha256sum -c -
+          tar -xzf /tmp/trivy.tar.gz -C /tmp trivy && chmod +x /tmp/trivy
+      # Before anything is pushed: a failed scan leaves no tag in the registry.
+      - name: no HIGH or CRITICAL vulnerability with a fix in the image
+        shell: bash
         run: |
           set -uo pipefail
           /tmp/trivy image --no-progress --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed \
-            --format json -o /tmp/scan.json "$IMAGE"
+            --list-all-pkgs --format json -o /tmp/scan.json exchange-mcp:candidate
           python3 - <<'PY'
           import json, sys
           d = json.load(open("/tmp/scan.json"))
           results = d.get("Results") or []
-          packages = sum(len(r.get("Packages") or []) for r in results) if results else 0
+          packages = sum(len(r.get("Packages") or []) for r in results)
           vulns = [v for r in results for v in (r.get("Vulnerabilities") or [])]
-          print(f"{len(results)} targets scanned, {len(vulns)} fixable HIGH/CRITICAL")
-          if not results:
-              print("trivy scanned nothing: the image did not load"); sys.exit(2)
+          print(f"{len(results)} targets, {packages} packages scanned, {len(vulns)} fixable HIGH/CRITICAL")
+          if not packages:
+              print("trivy found no packages: the image was not scanned"); sys.exit(2)
           for v in vulns:
               print(v["VulnerabilityID"], v.get("PkgName"), v.get("InstalledVersion"), "->", v.get("FixedVersion"))
           sys.exit(1 if vulns else 0)
           PY
-      - name: what an installation should pin
-        run: echo "$IMAGE"
+      - id: push
+        name: push the scanned image
+        shell: bash
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          set -euo pipefail
+          first=""
+          while IFS= read -r t; do
+            [ -n "$t" ] || continue
+            docker push "$t"
+            first="${first:-$t}"
+          done <<< "$TAGS"
+          digest=$(docker inspect --format '{{index .RepoDigests 0}}' "$first" | cut -d@ -f2)
+          case "$digest" in sha256:*) ;; *) echo "no digest after push: ${digest}"; exit 1;; esac
+          echo "pushed $(wc -l <<< "$TAGS") tags, digest ${digest}"
+          echo "what an installation should pin: ghcr.io/wide-moat/exchange-mcp@${digest}"
+          echo "digest=${digest}" >> "$GITHUB_OUTPUT"
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [image, trivy]
-    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    needs: image
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: notes from CHANGELOG, the version must have its section
         shell: bash
         env:
