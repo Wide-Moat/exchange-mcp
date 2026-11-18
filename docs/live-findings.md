@@ -22,6 +22,9 @@ answers in the measured shape. No host, address or person of the installation go
 | `ItemShape/MaximumBodySize` | 2016 CU23 | counted in characters, not kilobytes: 64 returned 64 characters of HTML | tests/unit/test_qa_mail.py::test_a_preview_is_built_from_the_body_without_hidden_text |
 | Online archive filled by an archive policy | 2016 CU23 | mail sits in a top-level copy of the mailbox's folders under their localized names; the distinguished `archiveinbox` is empty | tests/unit/test_qa_mail.py::test_the_archive_inbox_is_the_copy_of_the_mailbox_tree |
 | `FindItem` on tasks with a restriction on `task:Status` | 2016 CU23 | `ErrorInvalidValueForProperty`; `task:IsComplete` works instead | tests/unit/test_tasks.py::test_list_tasks_filters_open_tasks |
+| AQS `from:` for one's own address | 2016 CU23 | `from:addr` unquoted finds one's own mail; `from:"addr"` and `from:"Display Name"` find none | tests/unit/test_qa_mail.py::test_a_sender_address_is_searched_unquoted_and_matched_exactly |
+| `ResolveNames` over Contacts for a personal contact | 2016 CU23 | `t:Name` is the address; no display name, title, company or phone; `GetItem` on the contact's id has them | tests/unit/test_people.py::test_a_contact_reads_its_name_title_and_phone_from_the_item |
+| HTML written with `<div hidden>` through `save_draft` | 2016 CU23 | arrived as a visible div: the sanitiser drops the attribute and kept the text; such a draft is now refused | tests/unit/test_html.py::test_an_element_marked_hidden_is_refused_not_sent_visible |
 
 ## Not yet run live
 

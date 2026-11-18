@@ -91,6 +91,12 @@ class _Addresses:
         return self.known[a]
 
 
+def _marked_name(source: str, text: str | None) -> str | None:
+    """A display name from mail is text someone else wrote (manifesto 29, QA D6): one bounded line, marked."""
+    n = _name(text)
+    return content_line(source, n) if n else None
+
+
 async def _listing(addresses: _Addresses, m: em.Listing, tz, folder: str | None, preview: str | None) -> dict:
     names = [n for n in (_name(x) for x in m.to_display.split(";")) if n]
     return compact(
@@ -98,9 +104,11 @@ async def _listing(addresses: _Addresses, m: em.Listing, tz, folder: str | None,
             "id": m.id,
             "folder": folder,
             "received": local(m.received, tz),
-            "from": _name(m.sender.get("name")) or await addresses.of(m.sender, m.sender_smtp),
+            "from": _marked_name("the sender (name)", m.sender.get("name"))
+            or await addresses.of(m.sender, m.sender_smtp),
             "from_address": await addresses.of(m.sender, m.sender_smtp),
-            "to": names[:TO_SHOWN],
+            # one marker for the row's recipients rather than one per name: the same boundary, fewer tokens
+            "to": content_line("the sender (recipients' names)", "; ".join(names[:TO_SHOWN])) if names else None,
             "to_truncated": len(names) > TO_SHOWN,
             "to_total": len(names) if len(names) > TO_SHOWN else None,
             "subject": content_block("the sender (subject)", m.subject) if m.subject else None,
@@ -115,26 +123,20 @@ async def _listing(addresses: _Addresses, m: em.Listing, tz, folder: str | None,
     )
 
 
-async def _sender_search(c, sender: str) -> tuple[str, str | None, str | None]:
-    """The AQS term for `sender`, and the exact address and name a found message must match.
+def _sender_search(sender: str) -> tuple[str, str | None]:
+    """The AQS term for `sender`, and the exact address a found message must match.
 
-    AQS `from:` on Exchange matches display names, not the SMTP address of a sender inside the organisation,
-    whose From holds an X.500 DN: `from:me@corp` finds none of one's own mail (QA D7). A Restriction cannot
-    stand in, because FindItem takes a Restriction or a QueryString, never both, and a restriction on
-    message:From compares the stored address, SMTP for some senders and the DN for others. So an address
-    that belongs to someone in the address book (or to the person) is searched by their display name, and the
-    page is then filtered to the exact address, so a namesake elsewhere does not pass. An address outside
-    the organisation is stored as SMTP and searched as typed."""
+    Measured on Exchange 2016 (QA D7, second run): `from:addr` unquoted finds one's own mail, while the
+    quoted `from:"addr"` and `from:"Display Name"` found nothing. So an address is searched unquoted and
+    the page is then filtered to that exact address, so a namesake or a partial match does not pass. A
+    name of one word is searched unquoted too; a name of several words needs the quotes to stay one term."""
     s = sender.strip()
     if not resolve.ADDRESS.match(s):
-        return f'from:"{s.replace(chr(34), "")}"', None, None
-    if s.lower() == c.me.lower():
-        owner_name, address = c.cred.name, c.me
-    else:
-        owner = await resolve.owner_of(c.ews, s)
-        owner_name, address = (owner.name, owner.address) if owner else (None, s)
-    term = (owner_name or s).replace(chr(34), "")
-    return f'from:"{term}"', address.lower(), owner_name
+        words = s.replace(chr(34), "").split()
+        if not words:
+            return "", None
+        return (f"from:{words[0]}" if len(words) == 1 else f'from:"{" ".join(words)}"'), None
+    return f"from:{s.lower()}", s.lower()
 
 
 async def _from_matches(addresses: _Addresses, m: em.Listing, address: str) -> bool:
@@ -227,12 +229,13 @@ async def list_messages(
         s = ews_time(parse(since, tz, field="since")) if since else None
         u = ews_time(parse(until, tz, field="until")) if until else None
         aqs = None
-        from_address = from_name = None
+        from_address = None
         if query or sender:
             terms = [query.strip()] if query else []
             if sender:
-                term, from_address, from_name = await _sender_search(c, sender)
-                terms.append(term)
+                term, from_address = _sender_search(sender)
+                if term:
+                    terms.append(term)
             if since:
                 terms.append(f"received>={parse(since, tz).date().isoformat()}")
             if until:
@@ -289,7 +292,9 @@ async def get_message(
         addresses = _Addresses(c)
 
         async def person(r: dict[str, str], smtp: str = "") -> dict[str, str]:
-            return compact({"name": _name(r.get("name")), "address": await addresses.of(r, smtp)})
+            return compact(
+                {"name": _marked_name("the sender (name)", r.get("name")), "address": await addresses.of(r, smtp)}
+            )
 
         out: dict[str, Any] = {
             "id": m.id,

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Annotated, Any, Literal
 
 from pydantic import Field
@@ -29,6 +30,17 @@ def _row(f: ep.Found) -> dict[str, Any]:
             "room_list": name(f.room_list),
         }
     )
+
+
+async def _with_details(c, rows: list) -> list:
+    """The page's personal contacts with their own name, title and phone (QA D12, see ep.contact_details).
+    A failed read is an error like any other (manifesto 12), not a list passed off as complete."""
+    details = await ep.contact_details(c.ews, [f.id for f in rows if f.id])
+    out = []
+    for f in rows:
+        d = details.get(f.id)
+        out.append(replace(f, **{k: v for k, v in d.items() if v}) if d else f)
+    return out
 
 
 @tool(area="people", title="Find people and rooms", read_only=True, idempotent=True, returns_list=True)
@@ -74,7 +86,10 @@ async def list_people(
         else:
             every = await ep.resolve_names(c.ews, q, directory_only=source == "directory")
             cut = getattr(every, "truncated", False)
-        rows = [_row(f) for f in every[start : start + n]]
+        shown = every[start : start + n]
+        if source == "contacts":
+            shown = await _with_details(c, shown)
+        rows = [_row(f) for f in shown]
         nxt = await c.cursor_out({"o": start + n} if start + n < len(every) else None, scope)
         out = page_result(rows, nxt, **extra)
         if cut:  # on every page: later pages cannot bring back what Exchange left out

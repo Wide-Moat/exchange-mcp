@@ -146,6 +146,7 @@ Upstream: `SetUserOofSettings` for the person's own address only.
 | a recipient name that matches several people | tests/unit/test_mail.py::test_an_ambiguous_recipient_lists_candidates |
 | HTML that keeps a script, an event handler or a `javascript:` URL after the pipeline | tests/unit/test_html.py::test_dangerous_html_does_not_survive |
 | a relative URL in outgoing HTML | tests/unit/test_html.py::test_relative_urls_are_refused |
+| outgoing HTML with an element marked `hidden` (it would arrive visible) | tests/unit/test_html.py::test_an_element_marked_hidden_is_refused_not_sent_visible |
 | an uploaded body over 2 MB or not UTF-8 | tests/unit/test_links.py::test_an_oversized_body_upload_is_refused |
 | an attachment given as a path, a hidden file or an option (`../x`, `/etc/x`, `.env`, `-rf`) | tests/unit/test_mail.py::test_an_attachment_is_a_file_name_not_a_path |
 | renaming, moving or deleting a well-known folder | tests/unit/test_mail.py::test_well_known_folders_stay |

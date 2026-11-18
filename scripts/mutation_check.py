@@ -505,6 +505,24 @@ MUTATIONS = [
         "tests/unit/test_links.py",
     ),
     (
+        "a draft with an element marked hidden is refused",
+        "core/html.py",
+        [("    if tokens.found:", "    if False:")],
+        "tests/unit/test_html.py",
+    ),
+    (
+        "a contact's own name and title are read from the contact",
+        "tools/people.py",
+        [("            shown = await _with_details(c, shown)", "            pass")],
+        "tests/unit/test_people.py",
+    ),
+    (
+        "a sender address is held to the exact address",
+        "tools/mail.py",
+        [("        if from_address:", "        if False:")],
+        "tests/unit/test_qa_mail.py",
+    ),
+    (
         "previews never carry hidden text",
         "tools/mail.py",
         [

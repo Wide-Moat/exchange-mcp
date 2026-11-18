@@ -82,6 +82,7 @@ async def test_contacts_come_from_the_contacts_folder_with_ids(rt, ews, invoke):
             f'<m:ResolutionSet TotalItemsInView="2" IncludesLastItemInRange="true">{rows}</m:ResolutionSet>',
         ),
     )
+    ews.on("GetItem", ok("GetItem", "<m:Items/>"))  # no further details: the resolution's own stay
     r = await invoke("list_people", query="pat", source="contacts", limit=1)
     assert not r.is_error, r.text
     assert r.data["items"] == [{"name": "Pat Friend", "address": "pat@home.example", "source": "contacts", "id": "C1"}]
@@ -143,8 +144,63 @@ async def test_a_contact_with_three_addresses_is_one_row_with_its_name(rt, ews, 
             f'<m:ResolutionSet TotalItemsInView="3" IncludesLastItemInRange="true">{rows}</m:ResolutionSet>',
         ),
     )
+    ews.on("GetItem", ok("GetItem", "<m:Items/>"))
     r = await invoke("list_people", query="pat", source="contacts")
     assert not r.is_error, r.text
     assert len(r.data["items"]) == 1
     row = r.data["items"][0]
     assert row["name"] == "Pat Friend" and row["id"] == "C1" and row["title"] == "Buyer"
+
+
+def _contact_item(item: str, name: str, title: str, company: str, phone: str) -> str:
+    return (
+        f'<t:Contact><t:ItemId Id="{item}" ChangeKey="K"/><t:DisplayName>{name}</t:DisplayName>'
+        f"<t:CompanyName>{company}</t:CompanyName>"
+        f'<t:PhoneNumbers><t:Entry Key="MobilePhone">{phone}</t:Entry></t:PhoneNumbers>'
+        f"<t:JobTitle>{title}</t:JobTitle></t:Contact>"
+    )
+
+
+async def test_a_contact_reads_its_name_title_and_phone_from_the_item(rt, ews, invoke):
+    """Live (2016 CU23, QA D12 second run): ResolveNames over Contacts names a personal contact by its
+    address and carries no job title, company or phone. The page's contacts are read by their ids."""
+    rows = "".join(
+        f"<t:Resolution><t:Mailbox><t:Name>{a}</t:Name><t:EmailAddress>{a}</t:EmailAddress>"
+        f'<t:MailboxType>Contact</t:MailboxType><t:ItemId Id="C1" ChangeKey="K"/></t:Mailbox></t:Resolution>'
+        for a in ("pat@home.example", "pat@work.example")
+    )
+    ews.on(
+        "ResolveNames",
+        ok(
+            "ResolveNames",
+            f'<m:ResolutionSet TotalItemsInView="2" IncludesLastItemInRange="true">{rows}</m:ResolutionSet>',
+        ),
+    )
+    ews.on(
+        "GetItem",
+        ok("GetItem", f"<m:Items>{_contact_item('C1', 'Pat Friend', 'Buyer', 'Home Ltd', '+1 555 0101')}</m:Items>"),
+    )
+    r = await invoke("list_people", query="pat", source="contacts")
+    assert not r.is_error, r.text
+    [row] = r.data["items"]
+    assert row["name"] == "Pat Friend" and row["id"] == "C1"
+    assert row["title"] == "Buyer" and row["company"] == "Home Ltd" and row["phone"] == "+1 555 0101"
+    assert "C1" in ews.last("GetItem").xml()
+
+
+async def test_a_contact_whose_item_cannot_be_read_is_an_error(rt, ews, invoke):
+    """Manifesto 12: a failed read is not passed off as a complete list."""
+    rows = (
+        "<t:Resolution><t:Mailbox><t:Name>pat@home.example</t:Name><t:EmailAddress>pat@home.example</t:EmailAddress>"
+        '<t:MailboxType>Contact</t:MailboxType><t:ItemId Id="C1" ChangeKey="K"/></t:Mailbox></t:Resolution>'
+    )
+    ews.on(
+        "ResolveNames",
+        ok(
+            "ResolveNames",
+            f'<m:ResolutionSet TotalItemsInView="1" IncludesLastItemInRange="true">{rows}</m:ResolutionSet>',
+        ),
+    )
+    ews.on("GetItem", error("GetItem", "ErrorAccessDenied"))
+    r = await invoke("list_people", query="pat", source="contacts")
+    assert r.is_error

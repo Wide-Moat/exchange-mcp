@@ -140,10 +140,18 @@ async def test_names_from_other_people_are_one_line_and_bounded(rt, ews, invoke)
     r = await invoke("list_messages", folder="inbox")
     assert not r.is_error, r.text
     m = r.data["items"][0]
-    for value in [m["from"], *m["to"], *m["categories"]]:
+    # Names are someone else's text (manifesto 29, QA D6): each comes as one marked line whose inside
+    # cannot forge a marker; the row's recipients share one marker.
+    for value in [m["from"], m["to"]]:
+        assert value.startswith("<<<text ") and "\n" not in value, value
+        inner = value.split(">>> ", 1)[1].rsplit(" <<<end ", 1)[0]
+        assert "<<<" not in inner and ">>>" not in inner, inner
+    for value in m["categories"]:
         assert "<<<" not in value and "\n" not in value and len(value) <= 80, value
-    assert len(m["to"]) == 5 and m["to_total"] == 7
-    for i, shown in enumerate(m["to"][1:]):
+    shown_to = m["to"].split(">>> ", 1)[1].rsplit(" <<<end ", 1)[0].split("; ")
+    assert len(shown_to) == 5 and m["to_total"] == 7
+    assert all(len(n) <= 80 for n in shown_to)
+    for i, shown in enumerate(shown_to[1:]):
         whole = f"Person{i} Withaveryveryverylongsurname{'x' * 33} Andmore Words".split()
         assert all(w in whole for w in shown.rstrip("…").split()), shown  # never cut inside a word
     assert m["folder"] == "inbox"
@@ -152,34 +160,46 @@ async def test_names_from_other_people_are_one_line_and_bounded(rt, ews, invoke)
 # ---------------------------------------------------------------- D7
 
 
-async def test_a_sender_address_finds_mail_by_its_owners_name(rt, ews, invoke):
+async def test_a_sender_address_is_searched_unquoted_and_matched_exactly(rt, ews, invoke):
+    """Exchange 2016 finds one's own mail by `from:addr` unquoted, not by `from:"addr"` or the display name
+    (QA D7, measured on the second run). The page is then held to the exact address."""
     mine = message("I1", sender=("Alex Example", DN), routing="EX", smtp=ME)
     namesake = message("I2", sender=("Alex Example", "alex@other.example"))
     ews.on("FindItem", found(mine, namesake)).on("GetItem", bodies(I1="<p>a</p>", I2="<p>b</p>"))
     r = await invoke("list_messages", folder="sent", sender=ME.upper())
     assert not r.is_error, r.text
     q = ews.last("FindItem").xml()
-    assert 'from:"Alex Example"' in q and f"from:{ME}" not in q
+    assert f"from:{ME}" in q and f'from:"{ME}"' not in q and "Alex Example" not in q
     assert [m["id"] for m in r.data["items"]] == ["I1"]
 
 
-async def test_an_external_sender_address_is_searched_as_typed(rt, ews, invoke):
+async def test_a_sender_name_of_one_word_is_unquoted_and_of_several_is_quoted(rt, ews, invoke):
+    ews.on("FindItem", found()).on("GetItem", bodies())
+    r = await invoke("list_messages", folder="inbox", sender="Example")
+    assert not r.is_error, r.text
+    assert "from:Example" in ews.last("FindItem").xml()
+    await invoke("list_messages", folder="inbox", sender='Alex "x" Example')
+    assert 'from:"Alex x Example"' in ews.last("FindItem").xml()
+
+
+async def test_an_external_sender_address_is_searched_unquoted(rt, ews, invoke):
     ews.on("ResolveNames", no_one())
     ews.on("FindItem", found(message("I1", sender=("Kim", "kim@other.example")), message("I2")))
     ews.on("GetItem", bodies(I1="<p>a</p>", I2="<p>b</p>"))
     r = await invoke("list_messages", sender="kim@other.example")
     assert not r.is_error, r.text
-    assert 'from:"kim@other.example"' in ews.last("FindItem").xml()
+    assert "from:kim@other.example" in ews.last("FindItem").xml()
     assert [m["id"] for m in r.data["items"]] == ["I1"]
 
 
-async def test_a_colleagues_address_is_searched_by_their_name(rt, ews, invoke):
+async def test_a_colleagues_address_matches_their_mail_stored_under_a_dn(rt, ews, invoke):
+    """A colleague's mail carries an X.500 DN as its From; the exact-address filter resolves it to SMTP."""
     ews.on("ResolveNames", resolved("Sam One", "sam.one@corp.example"))
     ews.on("FindItem", found(message("I1", sender=("Sam One", "/O=CORP/CN=RECIPIENTS/CN=SAM"), routing="EX")))
     ews.on("GetItem", bodies(I1="<p>a</p>"))
     r = await invoke("list_messages", sender="sam.one@corp.example")
     assert not r.is_error, r.text
-    assert 'from:"Sam One"' in ews.last("FindItem").xml()
+    assert "from:sam.one@corp.example" in ews.last("FindItem").xml()
     assert [m["id"] for m in r.data["items"]] == ["I1"]
 
 

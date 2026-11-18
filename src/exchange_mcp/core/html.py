@@ -200,6 +200,27 @@ def _inline_css(html: str) -> str:
     return inliner.inline(html)
 
 
+class _HiddenAttr(HTMLParser):
+    """Whether any start tag carries `hidden`, read token by token: no tree, so no depth limit, and the
+    attributes of <html> and <body> count, which a fragment parse (nh3's) leaves out."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.found = 0
+
+    def handle_starttag(self, tag: str, attrs) -> None:
+        if any(k.lower() == "hidden" for k, _ in attrs):
+            self.found += 1
+
+    handle_startendtag = handle_starttag
+
+
+HIDDEN_REFUSED = (
+    "An element is marked hidden. Mail clients do not keep it hidden, so it would arrive as visible text "
+    "(and a hidden part of a message is not something to send for a person). Remove it, or write it visibly."
+)
+
+
 def prepare_outgoing(raw: bytes | str, *, max_bytes: int = MAX_HTML_BYTES) -> Outgoing:
     """decode → size → inline CSS → images to cid → sanitise → validate."""
     out = Outgoing(html="")
@@ -220,6 +241,11 @@ def prepare_outgoing(raw: bytes | str, *, max_bytes: int = MAX_HTML_BYTES) -> Ou
 
     before = _Scan()
     before.feed(text)
+
+    # The sanitiser below does not keep `hidden`, so its content would go out as ordinary visible text (QA N1).
+    tokens = _HiddenAttr()
+    tokens.feed(text)
+    tokens.close()
 
     if re.search(r"<style[\s>]", text, re.I):
         text = _inline_css(text)
@@ -262,6 +288,8 @@ def prepare_outgoing(raw: bytes | str, *, max_bytes: int = MAX_HTML_BYTES) -> Ou
         strip_comments=True,
         clean_content_tags={"script", "style", "iframe", "object", "embed", "noscript", "template", "svg", "math"},
     )
+    if tokens.found:
+        out.errors.append(HIDDEN_REFUSED)
     out.sanitized.extend(f"removed {what}" + (f" ×{n}" if n > 1 else "") for what, n in sorted(before.removed.items()))
 
     after = _Scan()

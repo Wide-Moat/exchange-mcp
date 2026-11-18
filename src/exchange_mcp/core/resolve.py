@@ -190,21 +190,6 @@ async def folder(ews: Ews, value: str, *, archive: bool = False) -> str:
 # ---------------------------------------------------------------- addresses of senders
 
 
-async def owner_of(ews: Ews, address: str) -> Person | None:
-    """The address-book entry that owns this exact address (primary or secondary), or None: an address
-    outside the organisation, or one Exchange cannot tell apart."""
-    try:
-        found = await candidates(ews, address)
-    except ExchangeError:
-        return None
-    exact = [p for p in found if p.address.lower() == address.lower()]
-    if len(exact) == 1:
-        return exact[0]
-    if not exact and len(found) == 1 and not getattr(found, "truncated", False):
-        return found[0]
-    return None
-
-
 async def address_of_dn(ews: Ews, dn: str) -> str | None:
     """The SMTP address behind an Exchange X.500 DN, or None when Exchange does not give exactly one."""
     try:
