@@ -23,10 +23,10 @@ Free and open source (Apache-2.0). **Status: 0.1.1**, tested against Exchange Se
 
 ## Sign-in
 
-| Mode | Needs | This server holds |
-|---|---|---|
-| `adfs` (**preferred**) | Exchange 2019 CU13+ or Subscription Edition on every client-facing server; AD FS and Exchange configured by administrators | an AD FS token that reaches EWS only |
-| `password` | any Exchange with EWS | the person's directory password, sealed; no second factor ([risks](docs/auth-modes.md#the-risks-of-password-and-what-holds-each)) |
+| Mode | Needs | This server holds | Checked against a live server |
+|---|---|---|---|
+| `adfs` (**preferred**) | Exchange 2019 CU13+ or Subscription Edition on every client-facing server; AD FS and Exchange configured by administrators | an AD FS token that reaches EWS only | **not yet**: unit tests against a fake AD FS only ([what to check](docs/live-findings.md#not-yet-run-live)) |
+| `password` | any Exchange with EWS | the person's directory password, sealed; no second factor ([risks](docs/auth-modes.md#the-risks-of-password-and-what-holds-each)) | yes, Exchange Server 2016 CU23 ([findings](docs/live-findings.md)) |
 
 The sealing key comes from Vault or OpenBao (recommended), or from a Kubernetes Secret generated at
 deploy time. Never from an environment variable.

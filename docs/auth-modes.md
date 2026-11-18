@@ -39,6 +39,11 @@ password
 | Exchange version | 2019 CU13+ or SE on every client-facing server | any version with EWS |
 | Administrators | AD FS application, Exchange authentication policy and auth server | a DNS name, a certificate, network access to EWS |
 
+`password` mode ran against a live Exchange Server 2016 CU23. `adfs` mode has not met a real AD FS
+or a real Exchange 2019 CU13+ yet: its unit tests run the whole flow against a fake AD FS, and the
+first live run must check the points in
+[`live-findings.md`](live-findings.md#not-yet-run-live).
+
 ## The login a person types
 
 People type their login three ways: `name`, `DOMAIN\name`, `name@domain`. The operator sets the

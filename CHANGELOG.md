@@ -40,6 +40,7 @@ The first release: one person's on-premises Exchange mailbox for an AI assistant
   of 10. Deletion moves to Deleted Items. Rules, forwarding, delegates, impersonation and export do not
   exist.
 - Sign-in page in English, Russian, Spanish, German and French, chosen by the browser.
-- Checked against Exchange Server 2016 CU23: every tool except `respond_to_event` (needs an invitation
+- Checked against Exchange Server 2016 CU23 in `password` mode; `adfs` mode is covered by unit tests
+  against a fake AD FS and has not run against a live one. Every tool was checked except `respond_to_event` (needs an invitation
   from someone else) and `save_automatic_reply` (left alone so a real reply's texts stay). What the live
   server did differently from the documentation is in `docs/live-findings.md`.
