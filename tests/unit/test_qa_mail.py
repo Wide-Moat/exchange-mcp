@@ -160,16 +160,17 @@ async def test_names_from_other_people_are_one_line_and_bounded(rt, ews, invoke)
 # ---------------------------------------------------------------- D7
 
 
-async def test_a_sender_address_is_searched_unquoted_and_matched_exactly(rt, ews, invoke):
-    """Exchange 2016 finds one's own mail by `from:addr` unquoted, not by `from:"addr"` or the display name
-    (QA D7, measured on the second run). The page is then held to the exact address."""
-    mine = message("I1", sender=("Alex Example", DN), routing="EX", smtp=ME)
-    namesake = message("I2", sender=("Alex Example", "alex@other.example"))
+async def test_a_sender_address_is_searched_with_its_owners_directory_name(rt, ews, invoke):
+    """Exchange 2016 finds by `from:addr` only new messages, not replies or forwards (QA D7, fourth run:
+    1 of 5); the display name as the address book writes it finds all. The page is then held to the
+    exact address, so a namesake elsewhere does not pass."""
+    ews.on("ResolveNames", resolved("Example Alex Middle", ME))
+    mine = message("I1", sender=("Example Alex Middle", DN), routing="EX", smtp=ME)
+    namesake = message("I2", sender=("Example Alex Middle", "alex@other.example"))
     ews.on("FindItem", found(mine, namesake)).on("GetItem", bodies(I1="<p>a</p>", I2="<p>b</p>"))
     r = await invoke("list_messages", folder="sent", sender=ME.upper())
     assert not r.is_error, r.text
-    q = ews.last("FindItem").xml()
-    assert f"from:{ME}" in q and f'from:"{ME}"' not in q and "Alex Example" not in q
+    assert f'(from:{ME} OR from:"Example Alex Middle")' in ews.last("FindItem").xml()
     assert [m["id"] for m in r.data["items"]] == ["I1"]
 
 
@@ -188,7 +189,8 @@ async def test_an_external_sender_address_is_searched_unquoted(rt, ews, invoke):
     ews.on("GetItem", bodies(I1="<p>a</p>", I2="<p>b</p>"))
     r = await invoke("list_messages", sender="kim@other.example")
     assert not r.is_error, r.text
-    assert "from:kim@other.example" in ews.last("FindItem").xml()
+    q = ews.last("FindItem").xml()
+    assert "from:kim@other.example" in q and " OR " not in q  # no owner in the address book: the address alone
     assert [m["id"] for m in r.data["items"]] == ["I1"]
 
 
@@ -199,7 +201,7 @@ async def test_a_colleagues_address_matches_their_mail_stored_under_a_dn(rt, ews
     ews.on("GetItem", bodies(I1="<p>a</p>"))
     r = await invoke("list_messages", sender="sam.one@corp.example")
     assert not r.is_error, r.text
-    assert "from:sam.one@corp.example" in ews.last("FindItem").xml()
+    assert '(from:sam.one@corp.example OR from:"Sam One")' in ews.last("FindItem").xml()
     assert [m["id"] for m in r.data["items"]] == ["I1"]
 
 
@@ -365,3 +367,11 @@ async def test_the_archive_inbox_is_the_copy_of_the_mailbox_tree(rt, ews, invoke
     r = await invoke("list_messages", archive=True, limit=1)
     assert not r.is_error, r.text
     assert 'Id="ARCH-IN"' in ews.last("FindItem").xml()
+
+
+async def test_a_failed_owner_lookup_is_an_error_not_a_narrower_search(rt, ews, invoke):
+    """Searching by the address alone would quietly miss replies and forwards (QA D7, fourth run)."""
+    ews.on("ResolveNames", error("ResolveNames", "ErrorServerBusy"))
+    r = await invoke("list_messages", folder="sent", sender=ME)
+    assert r.is_error
+    assert "FindItem" not in ews.ops()

@@ -123,20 +123,25 @@ async def _listing(addresses: _Addresses, m: em.Listing, tz, folder: str | None,
     )
 
 
-def _sender_search(sender: str) -> tuple[str, str | None]:
+async def _sender_search(c, sender: str) -> tuple[str, str | None]:
     """The AQS term for `sender`, and the exact address a found message must match.
 
-    Measured on Exchange 2016 (QA D7, second run): `from:addr` unquoted finds one's own mail, while the
-    quoted `from:"addr"` and `from:"Display Name"` found nothing. So an address is searched unquoted and
-    the page is then filtered to that exact address, so a namesake or a partial match does not pass. A
-    name of one word is searched unquoted too; a name of several words needs the quotes to stay one term."""
+    Measured on Exchange 2016 (QA D7, fourth run, five of one's own sent messages): `from:addr` finds only
+    new messages (1 of 5), not replies, forwards or meeting answers; `from:"Surname Name Patronymic"` as the
+    address book writes it finds all 5, and so does `from:addr OR from:Surname`. So an address is searched
+    as itself OR its owner's display name from the address book, then held to the exact address, so a
+    namesake does not pass. A name of one word is searched unquoted; several words stay one quoted term."""
     s = sender.strip()
     if not resolve.ADDRESS.match(s):
         words = s.replace(chr(34), "").split()
         if not words:
             return "", None
         return (f"from:{words[0]}" if len(words) == 1 else f'from:"{" ".join(words)}"'), None
-    return f"from:{s.lower()}", s.lower()
+    address = s.lower()
+    owner = await resolve.owner_of(c.ews, address)
+    shown = " ".join((owner.name if owner else "").replace(chr(34), "").split())
+    term = f'(from:{address} OR from:"{shown}")' if shown else f"from:{address}"
+    return term, address
 
 
 async def _from_matches(addresses: _Addresses, m: em.Listing, address: str) -> bool:
@@ -233,7 +238,7 @@ async def list_messages(
         if query or sender:
             terms = [query.strip()] if query else []
             if sender:
-                term, from_address = _sender_search(sender)
+                term, from_address = await _sender_search(c, sender)
                 if term:
                     terms.append(term)
             if since:
