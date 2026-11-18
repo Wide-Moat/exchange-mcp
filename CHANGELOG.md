@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.3
+
+Fixes from the second QA run on Exchange Server 2016 CU23.
+
+| Area | Fixed |
+|---|---|
+| Drafts | an element marked `hidden` went out as visible text (the sanitiser dropped the attribute and kept the content); such a draft is now refused with the reason |
+| Mail lists | sender and recipient names come marked as someone else's text, one marker for a row's recipients (manifesto 29) |
+| Sender filter | `sender=<address>` found nothing on Exchange 2016: the address is searched unquoted, then held to the exact address; a one-word name is searched unquoted |
+| People | a personal contact shows its own name, title, company and phone, read from the contact itself |
+
 ## 0.1.2
 
 | Area | Fixed |

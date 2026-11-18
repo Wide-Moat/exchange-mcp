@@ -244,3 +244,26 @@ def test_media_queries_not_only_and_lists():
     block = "<style>@media {m}{{.x{{display:none}}}}</style><p class=x>t</p>ok"
     assert html_to_text(block.format(m="not print")) == "ok"
     assert html_to_text(block.format(m="not screen")) == "t\nok"
+
+
+def test_an_element_marked_hidden_is_refused_not_sent_visible():
+    """The sanitiser drops the `hidden` attribute, so its content used to go out as plain visible text
+    (QA N1: a `<div hidden>` written through save_draft arrived as a visible div). Now refused, whichever
+    way the tag is written: each of these once slipped past a single reading."""
+    for raw in (
+        "<p>Hello</p><div hidden>SECRET</div>",
+        '<DIV HIDDEN="hidden"><p>SECRET</p></DIV>',
+        '<p>a</p><div title=">" hidden>SECRET</div>',
+        "<div hidden/>SECRET</div><p>Visible</p>",
+        "<body hidden><p>SECRET</p></body>",
+        "<html hidden><body><p>SECRET</p></body></html>",
+        '<?xml version="1.0" encoding="UTF-8"?><html><body><span hidden>SECRET</span><p>Hi</p></body></html>',
+        "<span hidden>x</span>" + "<div></span>" * 3000 + "END" + "</div>" * 3000,
+    ):
+        out = prepare_outgoing(raw)
+        assert any("marked hidden" in e for e in out.errors), raw[:60]
+
+
+def test_a_word_hidden_in_text_or_another_attribute_is_left_alone():
+    out = prepare_outgoing('<p title="hidden gem">The hidden cost is low.</p>')
+    assert "The hidden cost is low." in out.html and not out.errors

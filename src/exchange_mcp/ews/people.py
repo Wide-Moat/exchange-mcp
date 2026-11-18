@@ -152,6 +152,50 @@ async def rooms(ews: Ews) -> list[Found]:
 # ---------------------------------------------------------------- contacts
 
 
+async def contact_details(ews: Ews, items: list[str]) -> dict[str, dict[str, str]]:
+    """Name, title, department, company and phone of personal contacts, by id.
+
+    Live (2016 CU23): ResolveNames over Contacts names a contact by its address and leaves these fields out
+    (QA D12), so the contacts of one page are read here. A failure raises; the caller keeps what the
+    resolution gave."""
+    if not items:
+        return {}
+    messages = await ews.call(
+        M.GetItem(
+            M.ItemShape(
+                T.BaseShape("IdOnly"),
+                T.AdditionalProperties(
+                    *(
+                        T.FieldURI(FieldURI=f)
+                        for f in (
+                            "contacts:DisplayName",
+                            "contacts:JobTitle",
+                            "contacts:Department",
+                            "contacts:CompanyName",
+                            "contacts:PhoneNumbers",
+                        )
+                    )
+                ),
+            ),
+            M.ItemIds(*(T.ItemId(Id=i) for i in items)),
+        )
+    )
+    out: dict[str, dict[str, str]] = {}
+    for m in messages:
+        for el in findall(m, "m:Items/t:Contact"):
+            iid = el.find("{*}ItemId")
+            if iid is None:
+                continue
+            out[iid.get("Id", "")] = {
+                "name": text(el, "t:DisplayName"),
+                "title": text(el, "t:JobTitle"),
+                "department": text(el, "t:Department"),
+                "company": text(el, "t:CompanyName"),
+                "phone": _phone(el),
+            }
+    return out
+
+
 async def contact_change_key(ews: Ews, item: str) -> str:
     """The current ChangeKey of a personal contact; anything that is not a contact is refused."""
     messages = await ews.call(M.GetItem(M.ItemShape(T.BaseShape("IdOnly")), M.ItemIds(T.ItemId(Id=item))))
