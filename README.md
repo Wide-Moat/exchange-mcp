@@ -9,7 +9,7 @@ calendar, contacts, tasks) through Exchange Web Services, acting as that person 
 | Microsoft 365 / Exchange Online | [microsoft-365-mcp](https://github.com/Wide-Moat/microsoft-365-mcp) (Microsoft Graph); Microsoft turns EWS off in Exchange Online |
 | Both, during a migration | both, one per mailbox location |
 
-Free and open source (Apache-2.0). **Status: 0.1.1**, tested against Exchange Server 2016 CU23; [`CHANGELOG.md`](CHANGELOG.md) lists what each release holds. We wrote the documents below before the code, and the code follows them.
+Free and open source (Apache-2.0). **Status: 0.1.2**, tested against Exchange Server 2016 CU23; [`CHANGELOG.md`](CHANGELOG.md) lists what each release holds. We wrote the documents below before the code, and the code follows them.
 
 | Document | What it settles |
 |---|---|
