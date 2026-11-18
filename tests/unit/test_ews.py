@@ -200,7 +200,8 @@ async def test_ntlm_never_leaves_an_authenticated_connection_or_a_body_on_a_hand
     http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     with pytest.raises(ExchangeError):
         await Ews(http, EWS_URL, Ntlm("CORP\\alex", "pw")).call(M.DeleteItem())
-    assert [(a, body) for a, body, _ in legs] == [("", b"")]  # one empty probe; the delete never travelled
+    # one empty probe per attempt (the handshake is tried twice); the delete never travelled
+    assert [(a, body) for a, body, _ in legs] == [("", b""), ("", b"")]
     assert spnego is not None
 
 
@@ -278,3 +279,57 @@ async def test_ntlm_calls_run_on_a_client_of_their_own(ews, http, monkeypatch):
     await Ews(http, EWS_URL, Ntlm("CORP\\alex", PASSWORD)).call(M.GetItem())
     await Ews(http, EWS_URL, Bearer("t")).call(M.GetItem())
     assert len(made) == 1 and made[0].is_closed  # one for the NTLM call, closed after it; none for Bearer
+
+
+def _handshake_server(failures: int, users_file):
+    """An NTLM acceptor that answers the first `failures` anonymous probes without a challenge."""
+    import spnego
+
+    state = {"left": failures, "server": None}
+    legs: list[tuple[str, bytes]] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        auth = req.headers.get("authorization")
+        legs.append(((auth or "")[:4], req.content))
+        if not auth:
+            if state["left"]:
+                state["left"] -= 1
+                return httpx.Response(200, content=b"")  # a balancer's page, not an NTLM challenge
+            state["server"] = spnego.server(protocol="ntlm")
+            return httpx.Response(401, headers={"WWW-Authenticate": "NTLM"})
+        out = state["server"].step(base64.b64decode(auth.split(" ", 1)[1]))
+        if not state["server"].complete:
+            return httpx.Response(401, headers={"WWW-Authenticate": "NTLM " + base64.b64encode(out).decode()})
+        return httpx.Response(200, content=ok("GetItem"))
+
+    return handler, legs
+
+
+async def test_a_failed_ntlm_handshake_is_tried_once_more_and_then_succeeds(monkeypatch, tmp_path):
+    """The handshake legs carry no body and no password, so one more attempt cannot do anything twice."""
+    users = tmp_path / "ntlm_users"
+    users.write_text("CORP:alex:right-password\n")
+    monkeypatch.setenv("NTLM_USER_FILE", str(users))
+    handler, legs = _handshake_server(1, users)
+    http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    await Ews(http, EWS_URL, Ntlm("CORP\\alex", "right-password")).call(M.GetItem())
+    assert [a for a, _ in legs] == ["", "", "NTLM", "NTLM"]
+    assert sum(1 for _, body in legs if body) == 1  # the request itself travelled once
+
+
+async def test_a_handshake_that_fails_twice_names_the_next_step_and_logs_where(monkeypatch, tmp_path, caplog):
+    users = tmp_path / "ntlm_users"
+    users.write_text("CORP:alex:right-password\n")
+    monkeypatch.setenv("NTLM_USER_FILE", str(users))
+    handler, legs = _handshake_server(2, users)
+    http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    caplog.set_level("INFO")
+    with pytest.raises(ExchangeError) as e:
+        await Ews(http, EWS_URL, Ntlm("CORP\\alex", "right-password")).call(M.DeleteItem())
+    assert e.value.key == "handshake"
+    assert all(body == b"" for _, body in legs) and len(legs) == 2  # the delete never travelled
+    ref = e.value.params["ref"]
+    assert ref in e.value.text and "Try again" in e.value.text and "Nothing was done" in e.value.text
+    lines = [r.getMessage() for r in caplog.records if ref in r.getMessage()]
+    assert any("NtlmNotChallenged" in line and "200" in line for line in lines), lines
+    assert "right-password" not in caplog.text

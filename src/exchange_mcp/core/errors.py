@@ -23,6 +23,10 @@ MESSAGES: dict[str, str] = {
     "busy": "Exchange is busy right now. Try again in {seconds}. Nothing was done.",
     # The EWS code goes to the log beside the reference, not to the person (manifesto rule 11).
     "failed": "Exchange refused the request. {outcome} Reference {ref}.",
+    "handshake": (
+        "Exchange did not finish the sign-in handshake, so the request was not sent. Nothing was done. "
+        "Try again in a minute; if it keeps failing, tell the Exchange administrator. Reference {ref}."
+    ),
     "uncertain": (
         "Exchange failed while handling this, so it may or may not have happened. Check before trying again. "
         "Reference {ref}."
