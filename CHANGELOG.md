@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.4
+
+| Area | Fixed |
+|---|---|
+| People | a personal contact's phone was missing: phone numbers are an indexed property and are now asked for by kind (business, mobile, home, other) |
+
 ## 0.1.3
 
 Fixes from the second QA run on Exchange Server 2016 CU23.

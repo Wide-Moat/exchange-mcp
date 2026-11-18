@@ -59,7 +59,7 @@ def _ok(response: etree._Element) -> None:
 
 
 def _phone(el: etree._Element | None) -> str:
-    for key in PHONE_KEYS[:2]:
+    for key in PHONE_KEYS:
         v = text(el, f"t:PhoneNumbers/t:Entry[@Key='{key}']")
         if v:
             return v
@@ -172,9 +172,11 @@ async def contact_details(ews: Ews, items: list[str]) -> dict[str, dict[str, str
                             "contacts:JobTitle",
                             "contacts:Department",
                             "contacts:CompanyName",
-                            "contacts:PhoneNumbers",
                         )
-                    )
+                    ),
+                    # Phone numbers are an indexed property: asked for as a whole they come back empty (QA D12,
+                    # third run), so each kind is asked for by its key.
+                    *(_indexed("contacts:PhoneNumber", k) for k in PHONE_KEYS),
                 ),
             ),
             M.ItemIds(*(T.ItemId(Id=i) for i in items)),
