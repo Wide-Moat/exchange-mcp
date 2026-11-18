@@ -86,7 +86,11 @@ class SignIn:
         posted = str(form.get("form", "")).encode()  # bytes: compare_digest refuses non-ASCII text
         if not _same_origin(request) or not token or not hmac.compare_digest(token.encode(), posted):
             # Posted from another site, or without the page this server showed: the person did not agree here.
-            log.info("sign-in refused: form not from this page")
+            # The log names which check failed (never a value), so a refused sign-in can be told apart.
+            log.info(
+                "sign-in refused: form not from this page (%s)",
+                _refusal_reason(request, token, posted),
+            )
             return _page(lang, heading=t["h1_again"], error=t["expired"], status=403)
         if self.adfs is not None:
             # The person agreed on this page. The browser that agreed is the one that must come back: a
@@ -219,6 +223,21 @@ def _origin_of(url: str) -> tuple[str, str, int | None]:
     return scheme, host, None if port == {"https": 443, "http": 80}.get(scheme) else port
 
 
+def _refusal_reason(request: Request, token: str, posted: bytes) -> str:
+    """Which double-submit check failed, in words that carry no value from the request."""
+    if not _same_origin(request):
+        origin = request.headers.get("origin")
+        if origin is None:
+            return f"cross-site fetch: sec-fetch-site={request.headers.get('sec-fetch-site', '')[:20]}"
+        scheme, host, port = _origin_of(origin)
+        return f"origin {scheme}://{host}{f':{port}' if port else ''} is not the public URL's"[:200]
+    if not token:
+        return "no form cookie: the browser did not send it back"
+    if not posted:
+        return "no form token in the post"
+    return "form token differs from the cookie: an older sign-in page was submitted"
+
+
 def _same_origin(request: Request) -> bool:
     """A browser names where a POST comes from; a form on another site is refused."""
     origin = request.headers.get("origin")
@@ -316,7 +335,8 @@ def _page(
         headers={
             "Cache-Control": "no-store",
             "X-Frame-Options": "DENY",
-            "Referrer-Policy": "no-referrer",
+            # Not no-referrer: under it Chrome posts the form with `Origin: null`, which the origin check refuses.
+            "Referrer-Policy": "same-origin",
             "Content-Security-Policy": csp,
             "X-Content-Type-Options": "nosniff",
             "Content-Language": lang,

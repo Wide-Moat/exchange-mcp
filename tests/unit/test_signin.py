@@ -268,3 +268,25 @@ async def test_a_non_ascii_form_token_is_refused_not_a_crash(ews):
         "/signin", data={"request": rid, "login": "a", "password": "b", "form": "t\u00f6k\u00e9n-\u0442"}
     )
     assert r.status_code == 403
+
+
+async def test_the_sign_in_page_lets_the_browser_name_this_site(ews):
+    """Under `Referrer-Policy: no-referrer` Chrome posts the form with `Origin: null`, and the origin check
+    refused every sign-in from Chrome (found on a live run of 0.1.1). `same-origin` keeps the page's address
+    from other sites and lets the browser send this site's origin back to it."""
+    f = Flow(ews)
+    cid = await f.register()
+    rid = await f.request_id(cid, _pkce()[1])
+    page = await f.client.get("/signin", params={"request": rid})
+    assert page.headers["referrer-policy"] == "same-origin"
+
+
+async def test_a_form_posted_with_a_null_origin_is_refused(ews):
+    """`Origin: null` is what a sandboxed frame or a data: page sends; it is not this site."""
+    ews.on("ResolveNames", RESOLVED)
+    f = Flow(ews)
+    cid = await f.register()
+    rid = await f.request_id(cid, _pkce()[1])
+    r = await f.submit(rid, "alex", "pw-not-in-logs-1", origin="null")
+    assert r.status_code == 403
+    assert ews.attempts() == 0

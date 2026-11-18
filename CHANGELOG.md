@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.2
+
+| Area | Fixed |
+|---|---|
+| Sign-in | Chrome could not sign in: the page sent `Referrer-Policy: no-referrer`, under which Chrome posts the form with `Origin: null`, and the origin check refused it. The page now sends `same-origin`; a null or foreign origin is still refused |
+| Sign-in | a refused form logs which check failed (origin, missing cookie, older page), never a value |
+
 ## 0.1.1
 
 Fixes from a QA run of 131 cases on Exchange Server 2016 CU23.
