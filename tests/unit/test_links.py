@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 
 import httpx
+import pytest
 from conftest import PUBLIC, base_env, ok
 
 from exchange_mcp.app import build
@@ -99,3 +100,71 @@ async def test_uploading_the_same_file_twice_attaches_it_once(ews, cred):
     second = await client.put(path, content=b"hello")
     assert first.status_code == 200 and second.status_code == 200 and second.json().get("already") is True
     assert ews.ops().count("CreateAttachment") == 1
+
+
+async def test_an_upload_link_takes_one_upload_at_a_time(rt, cred):
+    """The mark is in the shared store: while one upload runs, the same link is refused on any replica,
+    and it is free again when the upload ends."""
+    from exchange_mcp.auth.credential import person_key
+
+    link = await rt.links.upload(cred, person_key(cred.login), "D1", "attach", "a.pdf")
+    lid = link["url"].rsplit("/", 1)[1]
+    first = await rt.links.claim_upload(lid)
+    assert first is not None
+    assert await rt.links.claim_upload(lid) is None
+    await rt.links.release_upload(first["u"])
+    assert await rt.links.claim_upload(lid) is not None
+
+
+async def test_a_download_slot_is_held_until_the_answer_is_sent(ews, cred):
+    """The attachment sits in memory until it is sent, so the slot that bounds downloads is released only
+    then, on every outcome: sent, refused by Exchange, or a client that went away mid-send."""
+    from exchange_mcp.auth.credential import person_key
+    from exchange_mcp.core import context
+    from exchange_mcp.links import routes
+
+    sealer = LocalSealer([("k1", os.urandom(32))])
+    client = app_for(ews, sealer)
+    links = context.runtime().links
+    free = routes._DOWNLOADS._value  # noqa: SLF001
+    ews.on("GetAttachment", 500)
+    bad = await links.download(cred, person_key(cred.login), "A1", "a.pdf", 3)
+    assert (await client.get(bad["url"].replace(PUBLIC, ""))).status_code == 502
+    assert routes._DOWNLOADS._value == free  # noqa: SLF001
+
+    await routes._DOWNLOADS.acquire()  # noqa: SLF001 - as the route does before building the answer
+    held = routes._Held(b"x" * 10)
+    assert routes._DOWNLOADS._value == free - 1  # noqa: SLF001
+
+    async def gone(message):
+        raise OSError("the client went away")
+
+    with pytest.raises(OSError):
+        await held({"type": "http"}, None, gone)
+    assert routes._DOWNLOADS._value == free  # noqa: SLF001
+
+
+async def test_a_content_type_no_header_can_carry_is_sent_as_a_plain_download(ews, cred):
+    """Exchange's ContentType is someone else's text. One a header cannot encode must not fail the answer
+    (and so never leak the download slot): it goes out as application/octet-stream."""
+    import base64
+
+    from exchange_mcp.auth.credential import person_key
+    from exchange_mcp.core import context
+    from exchange_mcp.links import routes
+
+    sealer = LocalSealer([("k1", os.urandom(32))])
+    client = app_for(ews, sealer)
+    free = routes._DOWNLOADS._value  # noqa: SLF001
+    ews.on(
+        "GetAttachment",
+        ok(
+            "GetAttachment",
+            "<m:Attachments><t:FileAttachment><t:Name>r.pdf</t:Name><t:ContentType>application/文件"
+            f"</t:ContentType><t:Content>{base64.b64encode(b'%PDF-1').decode()}</t:Content></t:FileAttachment></m:Attachments>",
+        ),
+    )
+    link = await context.runtime().links.download(cred, person_key(cred.login), "A1", "r.pdf", 6)
+    r = await client.get(link["url"].replace(PUBLIC, ""))
+    assert r.status_code == 200 and r.headers["content-type"] == "application/octet-stream"
+    assert routes._DOWNLOADS._value == free  # noqa: SLF001

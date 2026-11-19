@@ -1,16 +1,31 @@
 {{- include "exchange-mcp.validate" . }}
 {{- $stage := include "exchange-mcp.stagesSecret" . }}
+{{- $init := include "exchange-mcp.initContainer" . }}
+{{- $state := .Values.state }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: {{ include "exchange-mcp.fullname" . }}
   labels: {{- include "exchange-mcp.labels" . | nindent 4 }}
 spec:
+  {{- if not .Values.autoscaling.enabled }}
   replicas: {{ .Values.replicaCount }}
-  # Old and new pods never serve together: after a new key from CI they would hold different keys, and
-  # a client registered on one would be refused by the other until the rollout ended.
+  {{- end }}
+  {{- if and (include "exchange-mcp.sharedState" .) (ne .Values.key.provider "memory") }}
+  # A rolling update keeps the server up through a deploy: old and new pods share the key and the store.
+  # A new key (key.revision) replaces every pod; until that rollout ends, an old pod refuses what a new
+  # pod sealed, and the person signs in again.
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  {{- else }}
+  # State in the pod (or a key born in it): two pods must never serve together, or a sign-in code could
+  # be redeemed on each. A deploy is a few seconds without the server.
   strategy:
     type: Recreate
+  {{- end }}
   selector:
     matchLabels: {{- include "exchange-mcp.selectorLabels" . | nindent 6 }}
   template:
@@ -36,15 +51,34 @@ spec:
         fsGroup: 10001
         seccompProfile:
           type: RuntimeDefault
-      {{- if $stage }}
+      # Spread over nodes when there are several; never refuses to schedule.
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels: {{- include "exchange-mcp.selectorLabels" . | nindent 14 }}
+      {{- if $init }}
       initContainers:
-        # The only container that mounts the Secret. It copies the keys to a memory volume as files that
-        # the server's user alone may read; the server container never sees the Secret. The same image,
-        # so staging the keys needs no registry the server does not already need.
+        # The only container that mounts the Secrets. It copies the keys (and the state store's passwords)
+        # to a memory volume as files that the server's user alone may read; the server container never
+        # sees a Secret. The same image, so staging needs no registry the server does not already need.
         - name: stage-keys
           image: {{ include "exchange-mcp.image" . }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
-          command: ["python", "-m", "exchange_mcp.keys.stage", "/secret", "/run/exchange-mcp"]
+          command:
+            - python
+            - -m
+            - exchange_mcp.keys.stage
+            {{- if $stage }}
+            - /secret
+            {{- else }}
+            - /secret-state:state-
+            {{- end }}
+            - /run/exchange-mcp
+            {{- if and $stage $state.existingSecret }}
+            - /secret-state:state-
+            {{- end }}
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
@@ -57,9 +91,16 @@ spec:
             limits:
               memory: 64Mi
           volumeMounts:
+            {{- if $stage }}
             - name: secret
               mountPath: /secret
               readOnly: true
+            {{- end }}
+            {{- if $state.existingSecret }}
+            - name: secret-state
+              mountPath: /secret-state
+              readOnly: true
+            {{- end }}
             - name: keys
               mountPath: /run/exchange-mcp
       {{- end }}
@@ -75,7 +116,46 @@ spec:
           ports:
             - name: http
               containerPort: 8000
+            - name: metrics
+              containerPort: {{ .Values.metrics.port }}
           env:
+            - name: LOG_LEVEL
+              value: {{ .Values.logLevel | quote }}
+            {{- with .Values.trustedProxies }}
+            - name: EXCHANGE_MCP_TRUSTED_PROXIES
+              value: {{ join "," . | quote }}
+            {{- end }}
+            - name: EXCHANGE_MCP_METRICS_PORT
+              value: {{ .Values.metrics.port | quote }}
+            {{- if $state.url }}
+            - name: EXCHANGE_MCP_STATE_URL
+              value: {{ $state.url | quote }}
+            {{- if ne (int $state.db) 0 }}
+            - name: EXCHANGE_MCP_STATE_DB
+              value: {{ $state.db | quote }}
+            {{- end }}
+            {{- else if $state.sentinel.hosts }}
+            - name: EXCHANGE_MCP_STATE_SENTINELS
+              value: {{ join "," $state.sentinel.hosts | quote }}
+            - name: EXCHANGE_MCP_STATE_SENTINEL_MASTER
+              value: {{ $state.sentinel.master | quote }}
+            - name: EXCHANGE_MCP_STATE_DB
+              value: {{ $state.db | quote }}
+            - name: EXCHANGE_MCP_STATE_TLS
+              value: {{ $state.tls | quote }}
+            {{- end }}
+            {{- if $state.username }}
+            - name: EXCHANGE_MCP_STATE_USERNAME
+              value: {{ $state.username | quote }}
+            {{- end }}
+            {{- if $state.existingSecret }}
+            - name: EXCHANGE_MCP_STATE_PASSWORD_FILE
+              value: /run/exchange-mcp/state-password
+            {{- if $state.sentinel.hosts }}
+            - name: EXCHANGE_MCP_STATE_SENTINEL_PASSWORD_FILE
+              value: /run/exchange-mcp/state-sentinelPassword
+            {{- end }}
+            {{- end }}
             - name: EXCHANGE_MCP_PUBLIC_URL
               value: {{ .Values.publicUrl | quote }}
             - name: EXCHANGE_MCP_EWS_URL
@@ -134,22 +214,27 @@ spec:
             - name: EXCHANGE_MCP_CLIENT_HOSTS
               value: {{ join "," . | quote }}
             {{- end }}
+          # On the metrics port, which the Ingress never routes. Ready: the key seals and opens (the state
+          # store does not decide: its outage must not empty the Service). Alive: the process answers.
           readinessProbe:
             httpGet:
-              path: /healthz
-              port: http
-            periodSeconds: 10
+              path: /readyz
+              port: metrics
+            periodSeconds: 5
+            timeoutSeconds: 3  # /readyz waits at most 0.5 s for the store, and never fails on it
+            failureThreshold: 2
           livenessProbe:
             httpGet:
               path: /healthz
-              port: http
+              port: metrics
+            timeoutSeconds: 3
             periodSeconds: 30
             failureThreshold: 3
           resources: {{- toYaml .Values.resources | nindent 12 }}
           volumeMounts:
             - name: tmp
               mountPath: /tmp
-            {{- if $stage }}
+            {{- if $init }}
             - name: keys
               mountPath: /run/exchange-mcp
               readOnly: true
@@ -162,17 +247,27 @@ spec:
       volumes:
         - name: tmp
           emptyDir:
-            medium: Memory
-            sizeLimit: 16Mi
-        {{- if $stage }}
+            {{- with .Values.tmp.medium }}
+            medium: {{ . }}
+            {{- end }}
+            sizeLimit: {{ .Values.tmp.sizeLimit }}
+        {{- if $init }}
         - name: keys
           emptyDir:
             medium: Memory  # tmpfs, gone with the pod; on the node's disk only if the node swaps
             sizeLimit: 1Mi
+        {{- end }}
+        {{- if $stage }}
         - name: secret
           secret:
             secretName: {{ .Values.key.existingSecret }}
             defaultMode: 0440  # root:fsGroup; the init container reads it through the pod's group
+        {{- end }}
+        {{- if $state.existingSecret }}
+        - name: secret-state
+          secret:
+            secretName: {{ $state.existingSecret }}
+            defaultMode: 0440
         {{- end }}
         {{- if .Values.exchange.caBundle.configMap }}
         - name: ca

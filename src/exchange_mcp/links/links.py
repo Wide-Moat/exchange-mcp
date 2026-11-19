@@ -4,33 +4,32 @@ enter the model's context (manifesto rule 10).
 A link carries what it may do inside its own URL, sealed (`keys.seal`): a download link names one
 attachment and the person whose credential fetches it; an upload link names one draft this server made,
 the file name, and the person. Nothing is kept on the server, so any replica serves any link. The
-credential inside a link is sealed like the one inside a token and lives at most `MAX_TTL`.
+credential inside a link is sealed like the one inside a token and lives at most `MAX_TTL`. The one mark
+an upload leaves, "this link is being uploaded to now", is kept in the shared state store, so a second
+upload through the same link is refused on every replica while the first runs.
 """
 
 from __future__ import annotations
 
 import secrets
 import shlex
-import time
-from collections.abc import Callable
 
 from exchange_mcp.auth.credential import Credential
 from exchange_mcp.keys.seal import Sealer
+from exchange_mcp.state.store import StateStore
 
 DOWNLOAD_TTL = 300
 UPLOAD_TTL = 180
 MAX_TTL = 900
 MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024
 MAX_BODY_BYTES = 2 * 1024 * 1024
-BUSY_MAX = 10_000
 
 
 class Links:
-    def __init__(self, public_url: str, sealer: Sealer, clock: Callable[[], float] = time.time) -> None:
+    def __init__(self, public_url: str, sealer: Sealer, store: StateStore) -> None:
         self.public_url = public_url.rstrip("/")
         self.sealer = sealer
-        self._clock = clock
-        self._busy: dict[str, float] = {}  # one upload at a time per link on this replica
+        self._store = store  # one upload at a time per link, across every replica
 
     async def download(self, cred: Credential, person: str, attachment_id: str, name: str, size: int | None) -> dict:
         lid = await self.sealer.seal(
@@ -62,18 +61,15 @@ class Links:
         }
 
     async def claim_upload(self, lid: str) -> dict | None:
+        """The link's body when it opens and no upload through it is running; None otherwise. Raises
+        `StoreUnavailable` when the store cannot say: the caller refuses rather than risk two at once."""
         body = await self.sealer.open("upload", lid)
-        now = self._clock()
-        if body is None or self._busy.get(body["u"], 0) > now:
+        if body is None or not await self._store.once("upload", body["u"], UPLOAD_TTL):
             return None
-        if len(self._busy) >= BUSY_MAX:
-            for k in [k for k, exp in self._busy.items() if exp < now]:
-                del self._busy[k]
-        self._busy[body["u"]] = now + UPLOAD_TTL
         return body
 
-    def release_upload(self, uid: str) -> None:
-        self._busy.pop(uid, None)
+    async def release_upload(self, uid: str) -> None:
+        await self._store.release("upload", uid)
 
 
 def safe_name(name: str) -> str:

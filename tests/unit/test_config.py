@@ -72,3 +72,83 @@ def test_the_file_provider_needs_an_absolute_key_file():
 def test_unknown_areas_are_refused():
     with pytest.raises(ConfigError):
         Settings.from_env(base_env(AREAS="mail,rules"))
+
+
+# ---------------------------------------------------------------- the shared state store
+
+
+def test_no_store_means_memory_and_a_store_is_one_of_two_kinds():
+    assert Settings.from_env(base_env()).state is None
+    url = Settings.from_env(base_env(STATE_URL="redis://valkey:6379/2")).state
+    assert (url.mode, url.host, url.port, url.db, url.tls, url.prefix) == (
+        "redis",
+        "valkey",
+        6379,
+        2,
+        False,
+        "exchange-mcp:",
+    )
+    tls = Settings.from_env(base_env(STATE_URL="rediss://valkey:6380")).state
+    assert tls.tls and tls.port == 6380 and tls.db == 0
+    s = Settings.from_env(base_env(STATE_SENTINELS="s1:26379, s2:26379,[fd00::1]:26379", STATE_DB="1")).state
+    assert s.mode == "sentinel" and s.sentinel_master == "mymaster" and s.db == 1
+    assert s.sentinels == (("s1", 26379), ("s2", 26379), ("fd00::1", 26379))
+    assert s.password_file is None and s.sentinel_password_file is None  # no password is a first-class setup
+
+
+@pytest.mark.parametrize(
+    ("extra", "says"),
+    [
+        ({"STATE_URL": "redis://v:6379", "STATE_SENTINELS": "s:26379"}, "two different stores"),
+        ({"STATE_URL": "redis://user:pw@v:6379"}, "carries no credentials"),
+        ({"STATE_URL": "http://v:6379"}, "redis://host"),
+        ({"STATE_URL": "redis://v:6379/1", "STATE_DB": "2"}, "different databases"),
+        ({"STATE_URL": "redis://v:6379", "STATE_TLS": "true"}, "contradicts"),
+        ({"STATE_URL": "redis://v:6379", "STATE_SENTINEL_PASSWORD_FILE": "/run/x"}, "is for Sentinel"),
+        ({"STATE_SENTINELS": "s1"}, "host:port"),
+        ({"STATE_SENTINELS": "s1:99999"}, "host:port"),
+        ({"STATE_SENTINELS": "s1:26379", "STATE_DB": "x"}, "integer"),
+        ({"STATE_SENTINELS": "s1:26379", "STATE_TLS": "yes"}, "true or false"),
+        ({"STATE_SENTINELS": "s1:26379", "STATE_PASSWORD_FILE": "relative"}, "absolute path"),
+        ({"STATE_PASSWORD_FILE": "/run/x"}, "not named"),
+        ({"STATE_SENTINEL_MASTER": "other"}, "not named"),
+        ({"METRICS_PORT": "8000"}, "port of its own"),
+        ({"STATE_URL": "redis://v:6379/16"}, "is 0-15"),
+        ({"STATE_SENTINELS": "s:26379", "STATE_DB": "99"}, "is 0-15"),
+        ({"TRUSTED_PROXIES": "not-a-network"}, "addresses or CIDR"),
+    ],
+)
+def test_a_store_configured_wrong_stops_the_start(extra, says):
+    with pytest.raises(ConfigError) as e:
+        Settings.from_env(base_env(**extra))
+    assert says in str(e.value)
+
+
+def test_a_store_password_comes_from_a_closed_file_only(tmp_path):
+    from exchange_mcp.state.remote import read_password
+
+    good = tmp_path / "pw"
+    good.write_text("s3cret\n")
+    good.chmod(0o400)
+    assert read_password(good, "X") == "s3cret"
+    wide = tmp_path / "wide"
+    wide.write_text("s3cret")
+    wide.chmod(0o440)
+    empty = tmp_path / "empty"
+    empty.write_text("\n")
+    empty.chmod(0o400)
+    big = tmp_path / "big"
+    big.write_text("x" * 5000)
+    big.chmod(0o400)
+    for path, says in (
+        (wide, "readable by others"),
+        (empty, "empty"),
+        (big, "larger"),
+        (tmp_path, "regular file"),
+        (tmp_path / "absent", "cannot be read"),
+    ):
+        with pytest.raises(ConfigError) as e:
+            read_password(path, "X")
+        assert says in str(e.value)
+    with pytest.raises(ConfigError):  # the environment never carries it
+        Settings.from_env(base_env(STATE_PASSWORD="s3cret"))

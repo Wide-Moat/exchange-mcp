@@ -3,3 +3,4 @@ Sign-in: {{ .Values.auth.mode }}; sealing key: {{ .Values.key.provider }}{{ if .
 {{- if eq .Values.key.provider "memory" }}
 Every restart signs everyone out: the key lives in this pod's memory only.
 {{- end }}
+State: {{ if .Values.state.url }}Redis/Valkey at the configured URL{{ else if .Values.state.sentinel.hosts }}Redis/Valkey behind Sentinel ({{ .Values.state.sentinel.master }}){{ else }}in the pod's memory: one replica only{{ end }}. Metrics: port {{ .Values.metrics.port }}, /metrics.

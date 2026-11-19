@@ -1,0 +1,19 @@
+{{- if .Values.metrics.serviceMonitor.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "exchange-mcp.fullname" . }}
+  labels:
+    {{- /* the chart's own labels win: a value cannot render a key twice or move the selector */}}
+    {{- $own := include "exchange-mcp.labels" . | fromYaml }}
+    {{- toYaml (merge $own (.Values.metrics.serviceMonitor.labels | default dict)) | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "exchange-mcp.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: metrics
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: {{ .Values.metrics.serviceMonitor.interval }}
+{{- end }}

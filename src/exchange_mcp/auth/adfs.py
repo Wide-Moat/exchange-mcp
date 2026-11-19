@@ -28,6 +28,7 @@ from mcp.server.auth.provider import TokenError
 from starlette.requests import Request
 from starlette.responses import RedirectResponse, Response
 
+from exchange_mcp import metrics
 from exchange_mcp.auth.credential import Credential
 from exchange_mcp.config import Settings
 from exchange_mcp.core.errors import ExchangeError
@@ -131,6 +132,7 @@ class Adfs:
             browser = request.cookies.get(BROWSER_COOKIE, "")
             if state is None or not code or not browser or not hmac.compare_digest(browser, state.get("b", "")):
                 # Not the browser that agreed on this server's page: a link someone else started.
+                metrics.signin("wrong")
                 return _page(lang, heading=t["h1_again"], error=t["expired"], status=400)
             try:
                 tokens = await self._token(
@@ -144,7 +146,9 @@ class Adfs:
                 cred = await self._credential(tokens)
                 redirect = await provider.complete_sign_in(state["r"], cred)
             except (TokenError, ExchangeError, LookupError):
+                metrics.signin("error")
                 return _page(lang, heading=t["h1_again"], error=t["expired"], status=400)
+            metrics.signin("ok")
             return RedirectResponse(redirect, status_code=302)
 
         return callback
@@ -158,10 +162,13 @@ class Adfs:
             "client_assertion": self.assertion(),
             "resource": self.a.resource,
         }
+        started = time.perf_counter()
         try:
             r = await self.http.post(self.token_endpoint, data=data, headers={"Accept": "application/json"})
         except httpx.HTTPError:
+            metrics.upstream_status(None, time.perf_counter() - started)
             raise ExchangeError("busy", seconds=30) from None
+        metrics.upstream_status(r.status_code, time.perf_counter() - started)
         if r.status_code != 200:
             raise TokenError(error="invalid_grant", error_description="AD FS refused the grant; sign in again")
         body = r.json()

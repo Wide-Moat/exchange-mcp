@@ -14,12 +14,14 @@ from __future__ import annotations
 import asyncio
 import logging
 import secrets
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 
 import httpx
 from lxml import etree
 
+from exchange_mcp import metrics
 from exchange_mcp.core.errors import ExchangeError
 from exchange_mcp.ews.soap import envelope, find, findall, parse, q, text
 from exchange_mcp.ews.transport import HandshakeFailed, Ntlm
@@ -216,6 +218,15 @@ class Ews:
         return await self._read(self._http, payload)
 
     async def _read(self, http: httpx.AsyncClient, payload: bytes) -> tuple[bytes, int]:
+        started = time.perf_counter()
+        status: int | None = None
+        try:
+            content, status = await self._stream(http, payload)
+            return content, status
+        finally:
+            metrics.upstream_status(status, time.perf_counter() - started)
+
+    async def _stream(self, http: httpx.AsyncClient, payload: bytes) -> tuple[bytes, int]:
         async with http.stream(
             "POST",
             self._url,

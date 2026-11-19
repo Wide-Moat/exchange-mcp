@@ -171,6 +171,15 @@ def ews() -> FakeEws:
     return FakeEws()
 
 
+def memory_store(sealer, clock=None):
+    """The in-process store, keyed through the given sealer, as a replica without a shared store has."""
+    import time
+
+    from exchange_mcp.state.store import MemoryStore, Namer
+
+    return MemoryStore(Namer(sealer.derive, "exchange-mcp:"), clock=clock or time.monotonic)
+
+
 @pytest.fixture
 def settings() -> Settings:
     return Settings.from_env(base_env())
@@ -200,7 +209,7 @@ def rt(settings, http, sealer, cred):
     from exchange_mcp.links.links import Links
 
     runtime = context.Runtime(settings=settings, http=http, sealer=sealer)
-    runtime.links = Links(PUBLIC, sealer)
+    runtime.links = Links(PUBLIC, sealer, runtime.store)
     context.install(runtime)
     token = context.credential_override.set(cred)
     yield runtime

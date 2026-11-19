@@ -377,7 +377,7 @@ async def save_event(
         )
         receipt: dict[str, Any] = {}
         if told:
-            receipt = c.guard(kind="invite", user_confirmed=user_confirmed, recipients=told)
+            receipt = await c.guard(kind="invite", user_confirmed=user_confirmed, recipients=told)
         if existing is None:
             eid = await ec.create_event(c.ews, fields, send=bool(told))
         else:
@@ -414,7 +414,7 @@ async def respond_to_event(
         ev = await ec.get_event(c.ews, id, body=False)
         if ev.organised_by(c.me):
             raise invalid("You organise this meeting, so there is no invitation to answer. Nothing was sent.")
-        receipt = c.rt.guard.spend(c.person, kind="invite") if send_response else {}
+        receipt = await c.rt.guard.spend(c.person, kind="invite") if send_response else {}
         await ec.respond(c.ews, ev.id, ev.change_key, response, comment, send=send_response)
         return {"response": response, "organiser_told": send_response, **receipt}
 
@@ -439,6 +439,6 @@ async def cancel_event(
         if not told:
             await move_to_deleted(c.ews, [ev.id])
             return {"deleted": ev.id, "where": "Deleted Items"}
-        receipt = c.guard(kind="cancel", user_confirmed=user_confirmed, recipients=told)
+        receipt = await c.guard(kind="cancel", user_confirmed=user_confirmed, recipients=told)
         await ec.cancel(c.ews, ev.id, ev.change_key, comment)
         return {"cancelled": ev.id, "attendees_told": told, **receipt}

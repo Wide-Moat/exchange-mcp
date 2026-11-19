@@ -108,6 +108,133 @@ class Vault:
 
 
 @dataclass(frozen=True)
+class StateSettings:
+    """Where the shared state lives (`state.remote`). Absent: in this process, one replica."""
+
+    url: str = ""  # redis:// or rediss://, standalone
+    host: str = ""
+    port: int = 6379
+    sentinels: tuple[tuple[str, int], ...] = ()
+    sentinel_master: str = "mymaster"
+    db: int = 0
+    tls: bool = False
+    username: str = ""
+    password_file: Path | None = None
+    sentinel_password_file: Path | None = None
+    prefix: str = "exchange-mcp:"
+
+    @property
+    def mode(self) -> str:
+        return "redis" if self.url else "sentinel"
+
+
+DEFAULT_STATE_PREFIX = "exchange-mcp:"
+
+
+def _host_port(name: str, item: str) -> tuple[str, int]:
+    item = item.strip()
+    if item.startswith("["):  # [IPv6]:port
+        host, sep, port = item[1:].partition("]:")
+    else:
+        host, sep, port = item.rpartition(":")
+    if not sep or not host or not port.isdigit() or not 1 <= int(port) <= 65535:
+        raise ConfigError(f"{name} is a comma-separated list of host:port")
+    return host, int(port)
+
+
+def _networks(name: str, value: str) -> tuple[str, ...]:
+    import ipaddress
+
+    out = []
+    for item in (v.strip() for v in value.split(",")):
+        if not item:
+            continue
+        try:
+            out.append(str(ipaddress.ip_network(item, strict=False)))
+        except ValueError:
+            raise ConfigError(f"{name} is a comma-separated list of addresses or CIDR networks") from None
+    return tuple(out)
+
+
+def _db_range(db: int) -> None:
+    if not 0 <= db <= 15:
+        raise ConfigError(f"{PREFIX}STATE_DB, or the database in {PREFIX}STATE_URL, is 0-15")
+
+
+def _state(get, prefix_default: str = DEFAULT_STATE_PREFIX) -> StateSettings | None:
+    url = get("STATE_URL")
+    hosts = [h for h in get("STATE_SENTINELS").split(",") if h.strip()]
+    rest = {n: get(n) for n in ("STATE_USERNAME", "STATE_PASSWORD_FILE", "STATE_SENTINEL_PASSWORD_FILE", "STATE_DB")}
+    loose = {**rest, "STATE_TLS": get("STATE_TLS"), "STATE_SENTINEL_MASTER": get("STATE_SENTINEL_MASTER")}
+    if url and hosts:
+        raise ConfigError(f"{PREFIX}STATE_URL and {PREFIX}STATE_SENTINELS are two different stores: set one")
+    if not url and not hosts:
+        stray = sorted(PREFIX + n for n, v in loose.items() if v)
+        if stray:
+            raise ConfigError(
+                f"{', '.join(stray)} configure a store that is not named: set {PREFIX}STATE_URL or "
+                f"{PREFIX}STATE_SENTINELS"
+            )
+        return None
+    try:
+        db = int(rest["STATE_DB"] or "0")
+    except ValueError:
+        raise ConfigError(f"{PREFIX}STATE_DB must be an integer") from None
+    tls_word = get("STATE_TLS", "false").lower()
+    if tls_word not in ("true", "false"):
+        raise ConfigError(f"{PREFIX}STATE_TLS is true or false")
+    tls = tls_word == "true"
+    prefix = get("STATE_PREFIX", prefix_default)
+    if not prefix or len(prefix) > 64 or any(c.isspace() for c in prefix):
+        raise ConfigError(f"{PREFIX}STATE_PREFIX is 1-64 characters without spaces")
+    common = {
+        "db": db,
+        "username": rest["STATE_USERNAME"],
+        "password_file": _file(f"{PREFIX}STATE_PASSWORD_FILE", rest["STATE_PASSWORD_FILE"], required=False),
+        "prefix": prefix,
+    }
+    if url:
+        try:
+            u = urlsplit(url)
+            port = u.port or 6379
+        except ValueError:
+            raise ConfigError(f"{PREFIX}STATE_URL is not an address") from None
+        if u.scheme not in ("redis", "rediss") or not u.hostname:
+            raise ConfigError(f"{PREFIX}STATE_URL is redis://host:port/db or rediss://host:port/db")
+        if u.username or u.password:
+            raise ConfigError(
+                f"{PREFIX}STATE_URL carries no credentials: use {PREFIX}STATE_USERNAME and {PREFIX}STATE_PASSWORD_FILE"
+            )
+        if u.query or u.fragment:
+            raise ConfigError(f"{PREFIX}STATE_URL must not carry a query or a fragment")
+        path = u.path.strip("/")
+        if path:
+            if not path.isdigit():
+                raise ConfigError(f"{PREFIX}STATE_URL ends in a database number")
+            if rest["STATE_DB"] and int(path) != db:
+                raise ConfigError(f"{PREFIX}STATE_URL and {PREFIX}STATE_DB name different databases")
+            common["db"] = int(path)
+        _db_range(int(common["db"]))  # type: ignore[call-overload]
+        if rest["STATE_SENTINEL_PASSWORD_FILE"]:
+            raise ConfigError(f"{PREFIX}STATE_SENTINEL_PASSWORD_FILE is for Sentinel; this store is a URL")
+        if get("STATE_TLS") and tls != (u.scheme == "rediss"):
+            raise ConfigError(f"{PREFIX}STATE_TLS contradicts the scheme of {PREFIX}STATE_URL")
+        return StateSettings(url=url, host=u.hostname, port=port, tls=u.scheme == "rediss", **common)
+    _db_range(db)
+    sentinels = tuple(_host_port(f"{PREFIX}STATE_SENTINELS", h) for h in hosts)
+    master = get("STATE_SENTINEL_MASTER", "mymaster")
+    return StateSettings(
+        sentinels=sentinels,
+        sentinel_master=master,
+        tls=tls,
+        sentinel_password_file=_file(
+            f"{PREFIX}STATE_SENTINEL_PASSWORD_FILE", rest["STATE_SENTINEL_PASSWORD_FILE"], required=False
+        ),
+        **common,
+    )
+
+
+@dataclass(frozen=True)
 class Settings:
     public_url: str
     ews_url: str
@@ -127,6 +254,11 @@ class Settings:
     attempts_per_login: int = 5
     attempts_per_network: int = 20
     port: int = 8000
+    metrics_port: int = 9090
+    state: StateSettings | None = None
+    # The proxies (an ingress controller) whose X-Forwarded-For names the client. Empty: the client's
+    # network is unknown behind a proxy, so the per-network sign-in limit is off.
+    trusted_proxies: tuple[str, ...] = ()
 
     @classmethod
     def from_env(cls, env: dict[str, str] | None = None) -> Settings:
@@ -173,10 +305,13 @@ class Settings:
             per_login = int(get("ATTEMPTS_PER_LOGIN", "5"))
             per_network = int(get("ATTEMPTS_PER_NETWORK", "20"))
             port = int(e.get("PORT", "8000"))
+            metrics_port = int(get("METRICS_PORT", "9090"))
         except ValueError:
             raise ConfigError("numeric settings must be integers") from None
         if mode == "password" and not 1 <= refresh_hours <= PASSWORD_REFRESH_MAX_HOURS:
             raise ConfigError(f"{PREFIX}REFRESH_HOURS is 1-{PASSWORD_REFRESH_MAX_HOURS} in password mode")
+        if not 1 <= metrics_port <= 65535 or metrics_port == port:
+            raise ConfigError(f"{PREFIX}METRICS_PORT is a port of its own, never the public one")
         if not (1 <= per_login <= 10 and 1 <= per_network <= 100):
             raise ConfigError("sign-in attempt limits are 1-10 per login and 1-100 per network")
 
@@ -204,6 +339,9 @@ class Settings:
             attempts_per_login=per_login,
             attempts_per_network=per_network,
             port=port,
+            metrics_port=metrics_port,
+            state=_state(get),
+            trusted_proxies=_networks(f"{PREFIX}TRUSTED_PROXIES", get("TRUSTED_PROXIES")),
         )
 
 

@@ -6,7 +6,7 @@ import logging
 
 from conftest import ok
 
-from exchange_mcp.observability import DROPPED, ContentFilter, configure
+from exchange_mcp.observability import ContentFilter, configure, dropped
 
 SECRETS = ("pw-not-in-logs-1", "pat@corp.example", "Quarterly numbers", "alex@corp.example", "Hi there")
 
@@ -29,7 +29,7 @@ async def test_a_full_flow_logs_no_content(rt, ews, invoke, caplog):
 
 def test_the_filter_drops_what_looks_like_content():
     f = ContentFilter()
-    before = DROPPED["count"]
+    before = dropped()
     for msg in (
         "sent to pat@corp.example",
         "Authorization: NTLM TlRMTVNTUAADAAAAGAAYAH",
@@ -37,7 +37,7 @@ def test_the_filter_drops_what_looks_like_content():
         "token k1.QUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFB",
     ):
         assert not f.filter(logging.LogRecord("x", logging.INFO, __file__, 1, msg, (), None))
-    assert DROPPED["count"] == before + 4
+    assert dropped() == before + 4
     assert f.filter(logging.LogRecord("x", logging.INFO, __file__, 1, "tool send_draft refused: confirm", (), None))
 
 

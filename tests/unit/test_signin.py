@@ -9,7 +9,7 @@ from urllib.parse import parse_qs, urlsplit
 
 import httpx
 import pytest
-from conftest import EWS_URL, PUBLIC, FakeEws, base_env, ok
+from conftest import EWS_URL, PUBLIC, FakeEws, base_env, memory_store, ok
 
 from exchange_mcp.app import build
 from exchange_mcp.auth.limiter import Limited, Limiter
@@ -47,19 +47,19 @@ def test_a_login_of_another_domain_is_refused(typed):
         normalise(typed, "upn", "corp.example")
 
 
-def test_password_attempts_are_limited():
+async def test_password_attempts_are_limited():
     t = [0.0]
-    lim = Limiter(per_login=5, per_network=20, clock=lambda: t[0])
+    lim = Limiter(memory_store(LocalSealer([("k1", b"k" * 32)]), clock=lambda: t[0]), per_login=5, per_network=20)
     for _ in range(5):
-        lim.take(login="a@corp.example", network="10.0.0.1")
+        await lim.take(login="a@corp.example", network="10.0.0.1")
     with pytest.raises(Limited):
-        lim.take(login="a@corp.example", network="10.0.0.2")
+        await lim.take(login="a@corp.example", network="10.0.0.2")
     for i in range(15):  # the network has 5 attempts counted; 15 more fill it
-        lim.take(login=f"u{i}@corp.example", network="10.0.0.1")
+        await lim.take(login=f"u{i}@corp.example", network="10.0.0.1")
     with pytest.raises(Limited):
-        lim.take(login="fresh@corp.example", network="10.0.0.1")
+        await lim.take(login="fresh@corp.example", network="10.0.0.1")
     t[0] += 15 * 60 + 1
-    lim.take(login="a@corp.example", network="10.0.0.1")  # the window slid
+    await lim.take(login="a@corp.example", network="10.0.0.1")  # the window slid
 
 
 def _pkce() -> tuple[str, str]:
@@ -69,13 +69,15 @@ def _pkce() -> tuple[str, str]:
 
 
 class Flow:
-    def __init__(self, ews: FakeEws, **env: str) -> None:
+    def __init__(self, ews: FakeEws, *, sealer=None, store=None, **env: str) -> None:
+        """One replica. Two Flows given one sealer and one shared store are two replicas of one deployment."""
         import os
 
         self.ews = ews
         settings = Settings.from_env(base_env(**env))
         outbound = httpx.AsyncClient(transport=httpx.MockTransport(ews.handler))
-        self.app, self.server, self.provider = build(settings, outbound, LocalSealer([("k1", os.urandom(32))]))
+        sealer = sealer or LocalSealer([("k1", os.urandom(32))])
+        self.app, self.server, self.provider = build(settings, outbound, sealer, store)
         self.client = httpx.AsyncClient(
             transport=httpx.ASGITransport(app=self.app, client=("10.1.2.3", 5555)), base_url=PUBLIC
         )

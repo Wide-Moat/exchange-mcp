@@ -59,3 +59,18 @@ class Transit:
             return base64.b64decode(r.json()["data"]["plaintext"], validate=True)
         except (KeyError, ValueError):
             return None
+
+    async def hmac(self, data: bytes, *, version: int) -> bytes:
+        """Transit's HMAC of `data` under one fixed version of this key (the `vault:v<n>:` string, as bytes):
+        a fixed version, so a rotation of the transit key does not change the answer."""
+        r = await self._http.post(
+            f"{self._base}/hmac/{self._key}",
+            json={"input": base64.b64encode(data).decode(), "key_version": version},
+            headers=self._headers(),
+        )
+        if r.status_code != 200:
+            raise TransitError(f"transit hmac answered {r.status_code}")
+        try:
+            return str(r.json()["data"]["hmac"]).encode()
+        except (KeyError, ValueError):
+            raise TransitError("transit hmac answered without an hmac") from None

@@ -9,7 +9,7 @@ calendar, contacts, tasks) through Exchange Web Services, acting as that person 
 | Microsoft 365 / Exchange Online | [microsoft-365-mcp](https://github.com/Wide-Moat/microsoft-365-mcp) (Microsoft Graph); Microsoft turns EWS off in Exchange Online |
 | Both, during a migration | both, one per mailbox location |
 
-Free and open source (Apache-2.0). **Status: 0.1.7**, tested against Exchange Server 2016 CU23; [`CHANGELOG.md`](CHANGELOG.md) lists what each release holds. We wrote the documents below before the code, and the code follows them.
+Free and open source (Apache-2.0). **Status: 0.2.0**, tested against Exchange Server 2016 CU23; [`CHANGELOG.md`](CHANGELOG.md) lists what each release holds. We wrote the documents below before the code, and the code follows them.
 
 | Document | What it settles |
 |---|---|
@@ -28,19 +28,25 @@ Free and open source (Apache-2.0). **Status: 0.1.7**, tested against Exchange Se
 | `adfs` (**preferred**) | Exchange 2019 CU13+ or Subscription Edition on every client-facing server; AD FS and Exchange configured by administrators | an AD FS token that reaches EWS only | **not yet**: unit tests against a fake AD FS only ([what to check](docs/live-findings.md#not-yet-run-live)) |
 | `password` | any Exchange with EWS | the person's directory password, sealed; no second factor ([risks](docs/auth-modes.md#the-risks-of-password-and-what-holds-each)) | yes, Exchange Server 2016 CU23 ([findings](docs/live-findings.md)) |
 
-The sealing key comes from Vault or OpenBao (recommended), or from a Kubernetes Secret that CI
-generates at deploy time. Never from an environment variable.
+The sealing key comes from Vault or OpenBao (recommended), or from a Kubernetes Secret the deployer
+owns, created once. Never from an environment variable.
 
 ## Install
 
 ```sh
-kid=$(scripts/new-sealing-key.sh exchange-mcp exchange-mcp-key)   # in the deploy job
+scripts/new-sealing-key.sh exchange-mcp exchange-mcp-key   # once; prints only the key id
 helm upgrade --install exchange-mcp oci://ghcr.io/wide-moat/charts/exchange-mcp -n exchange-mcp \
   --set publicUrl=https://mcp.corp.example \
   --set exchange.ewsUrl=https://mail.corp.example/EWS/Exchange.asmx \
   --set auth.password.loginDomain=corp.example \
-  --set key.existingSecret=exchange-mcp-key --set key.revision="$kid"
+  --set key.existingSecret=exchange-mcp-key \
+  --set 'state.sentinel.hosts={redis-sentinel:26379}'   # or state.url=redis://…; or replicaCount=1
 ```
+
+Two replicas by default, sharing the key and a Redis or Valkey store; probes and Prometheus metrics on
+port 9090; JSON logs. The tool surface is a contract, pinned in
+[`tool-surface.lock.json`](tool-surface.lock.json): a change to a tool's name, arguments or annotations
+fails CI until the lock is updated on purpose.
 
 [`charts/exchange-mcp/README.md`](charts/exchange-mcp/README.md) lists every value and how the key
 reaches the server.
@@ -58,3 +64,17 @@ reaches the server.
 
 Excluded by design: inbox rules, forwarding, delegates, permissions, other mailboxes,
 impersonation, export, hard delete.
+
+## Security review
+
+| Question | Answer |
+|---|---|
+| AI models used by the server | none: it serves tools to the assistant the organisation already runs |
+| Outbound connections | the configured EWS address (https, CA verified); AD FS in `adfs` mode; the secrets manager with `key.provider: vault`; the state store (Redis or Valkey). Nothing on the internet: Autodiscover is never used, no telemetry |
+| Data in | the person's login and password (`password` mode) or an AD FS token (`adfs`), tool arguments from the assistant, files uploaded through short-lived links |
+| Data out | the person's own mail, calendar, contacts and tasks, to the assistant that called the tool; drafts and sends to Exchange only after `user_confirmed=true` |
+| What the server stores | nothing about the person: the credential travels sealed (AES-GCM) inside the person's own tokens |
+| What the state store holds, and for how long | HMAC-named counters and marks only: redeemed sign-in codes (6 min), sign-in attempt windows (15 min), the send allowance (≤1 min to refill), running uploads (3 min). No credential, token, address or content |
+| Logs | JSON, keys and outcomes only; a filter drops any line shaped like an address, a token or a sealed blob, and counts it (`mcp_log_records_dropped_total`) |
+| Sign-in protection | attempt limits per login and per client network, shared by every replica; identical answers for unknown and wrong; refused while the store is unreachable |
+| Report a defect | [SECURITY.md](SECURITY.md) |

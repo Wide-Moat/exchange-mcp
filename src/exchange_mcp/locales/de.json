@@ -14,6 +14,7 @@
   "note": "Dieser Connector speichert Ihr Kennwort verschlüsselt in der Verbindung Ihrer App und nutzt es nur für den Zugriff auf Ihr Postfach. E-Mails werden erst nach Ihrer Bestätigung gesendet.",
   "password": "Kennwort",
   "title": "Bei Exchange anmelden",
+  "try_shortly": "Die Anmeldung ist kurz nicht verfügbar. Es wurde nichts geprüft; versuchen Sie es in einer Minute erneut.",
   "unavailable": "Exchange hat nicht geantwortet. Versuchen Sie es in einigen Minuten erneut.",
   "unknown_client": "Dieser Server erkennt die Verbindung Ihrer KI-App nicht mehr: Der Server wurde aktualisiert oder sein Schlüssel geändert. Entfernen Sie in Ihrer KI-App die Autorisierung dieses Connectors und verbinden Sie sich erneut.",
   "wrong": "Benutzername oder Kennwort wurden nicht akzeptiert."

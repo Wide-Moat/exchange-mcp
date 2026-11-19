@@ -3,6 +3,7 @@ the Secret itself (keys/stage.py)."""
 
 from __future__ import annotations
 
+import json
 import os
 import stat
 
@@ -73,7 +74,34 @@ def test_it_prints_names_and_never_a_value(tmp_path, capsys):
     stage.main([str(src), str(dst)])
     out = capsys.readouterr()
     assert "AAAA" not in out.out + out.err and "BEGIN" not in out.out + out.err
-    assert "2 files" in out.out
+    lines = [json.loads(line) for line in out.err.splitlines()]
+    assert out.out == "" and len(lines) == 1, "one JSON line on stderr, nothing else"
+    assert lines[0]["event"] == "keys_staged" and lines[0]["count"] == 2
+    assert lines[0]["files"] == ["adfs.pem", "key"]
+
+
+def test_a_second_secret_is_staged_under_its_prefix(tmp_path):
+    """The state store's passwords come from their own Secret and land beside the key, prefixed."""
+    src = _secret_volume(tmp_path / "secret")
+    state = tmp_path / "state"
+    state.mkdir()
+    (state / "password").write_text("store-password")
+    dst = tmp_path / "run"
+    dst.mkdir()
+    stage.main([str(src), str(dst), f"{state}:state-"])
+    assert sorted(os.listdir(dst)) == ["adfs.pem", "key", "state-password"]
+    assert oct(os.stat(dst / "state-password").st_mode & 0o777) == "0o400"
+
+
+def test_an_empty_second_secret_stops_the_pod(tmp_path):
+    src = _secret_volume(tmp_path / "secret")
+    state = tmp_path / "state"
+    state.mkdir()
+    dst = tmp_path / "run"
+    dst.mkdir()
+    with pytest.raises(SystemExit) as e:
+        stage.main([str(src), str(dst), f"{state}:state-"])
+    assert e.value.code == 2
 
 
 def test_a_key_whose_name_starts_with_one_dot_is_staged(tmp_path):
@@ -119,4 +147,28 @@ def test_a_temporary_file_left_by_a_killed_attempt_does_not_block_the_next(tmp_p
     left.write_text("half")
     left.chmod(0o400)
     assert stage.copy(src, dst) == 2
+    assert sorted(os.listdir(dst)) == ["adfs.pem", "key"]
+
+
+def test_two_secrets_never_stage_the_same_file(tmp_path):
+    """`key.secretKey: state-password` would put the store's password over the sealing key."""
+    src = tmp_path / "secret"
+    src.mkdir()
+    (src / "state-password").write_text("k1:" + "A" * 43)
+    state = tmp_path / "state"
+    state.mkdir()
+    (state / "password").write_text("store-password")
+    dst = tmp_path / "run"
+    dst.mkdir()
+    with pytest.raises(SystemExit) as e:
+        stage.main([str(src), str(dst), f"{state}:state-"])
+    assert e.value.code == 2 and os.listdir(dst) == []
+
+
+def test_staging_again_replaces_what_an_earlier_attempt_left(tmp_path):
+    src = _secret_volume(tmp_path / "secret")
+    dst = tmp_path / "run"
+    dst.mkdir()
+    stage.main([str(src), str(dst)])
+    stage.main([str(src), str(dst)])  # an init container that ran twice
     assert sorted(os.listdir(dst)) == ["adfs.pem", "key"]

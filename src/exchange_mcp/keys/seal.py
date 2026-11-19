@@ -16,6 +16,8 @@ this server no longer holds: the caller answers 401 and the person signs in agai
 from __future__ import annotations
 
 import base64
+import hashlib
+import hmac
 import json
 import os
 import time
@@ -50,6 +52,12 @@ class Sealer(Protocol):
     async def seal(self, kind: str, payload: dict[str, Any], ttl: float) -> str: ...
 
     async def open(self, kind: str, blob: str | None) -> dict[str, Any] | None: ...
+
+    async def derive(self, label: bytes) -> list[bytes]:
+        """32 bytes per key that opens, derived for one purpose named by `label`, the sealing key first; the
+        keys stay where they are. A caller that must agree with replicas holding another ring (a rotation
+        in progress) checks under every one of them."""
+        ...
 
 
 def _body(kind: str, payload: dict[str, Any], ttl: float, now: float) -> bytes:
@@ -93,12 +101,16 @@ class LocalSealer:
         if len({kid for kid, _ in keys}) != len(keys):
             raise ValueError("key ids must be unique")
         self._active = keys[0][0]
+        self._raw = [key for _, key in keys]  # the sealing key first, as in the file
         self._aead = {kid: AESGCM(key) for kid, key in keys}
         self._clock = clock
 
     @property
     def key_id(self) -> str:
         return self._active
+
+    async def derive(self, label: bytes) -> list[bytes]:
+        return [hmac.new(raw, b"exchange-mcp derive\n" + label, hashlib.sha256).digest() for raw in self._raw]
 
     async def seal(self, kind: str, payload: dict[str, Any], ttl: float) -> str:
         nonce = os.urandom(12)
@@ -134,6 +146,11 @@ class VaultSealer:
     def __init__(self, transit, clock: Callable[[], float] = time.time) -> None:
         self._transit = transit  # keys.vault.Transit
         self._clock = clock
+
+    async def derive(self, label: bytes) -> list[bytes]:
+        """Transit's HMAC of the label under version 1 of the transit key: the same on every replica and
+        across rotations of the transit key, never the key itself."""
+        return [hashlib.sha256(await self._transit.hmac(b"exchange-mcp derive\n" + label, version=1)).digest()]
 
     async def seal(self, kind: str, payload: dict[str, Any], ttl: float) -> str:
         ct = await self._transit.encrypt(_body(kind, payload, ttl, self._clock()))

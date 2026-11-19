@@ -97,7 +97,8 @@ moving between an on-premises mailbox and a cloud one sees the same tools.
     stops the server from starting. *Violation:* any code path that reads key material from
     `os.environ`.
 21. **Sign-in cannot be used to guess passwords or lock accounts.** Attempts are limited per login
-    and per client network, below the directory's lockout threshold; the page never says whether a
+    and, where a trusted proxy names it, per client network, below the directory's lockout threshold,
+    and every replica counts against the same limit; the page never says whether a
     login exists. *Violation:* a loop that makes the server try passwords against the directory
     faster than the limit.
 22. **TLS is always verified**, against the operator's CA bundle when Exchange or AD FS uses an

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from conftest import memory_store
 
 from exchange_mcp.core.cursor import Cursors
 from exchange_mcp.core.errors import ExchangeError
@@ -10,26 +11,26 @@ from exchange_mcp.core.guard import Guard
 from exchange_mcp.core.project import clamp_limit
 
 
-def test_the_bucket_refuses_the_eleventh_action():
+async def test_the_bucket_refuses_the_eleventh_action(sealer):
     t = [0.0]
-    g = Guard(clock=lambda: t[0])
+    g = Guard(memory_store(sealer, clock=lambda: t[0]))
     for i in range(10):
-        assert g.check("p", kind="mail", user_confirmed=True)["sends_left"] == 9 - i
+        assert (await g.check("p", kind="mail", user_confirmed=True))["sends_left"] == 9 - i
     with pytest.raises(ExchangeError) as e:
-        g.check("p", kind="mail", user_confirmed=True)
-    assert e.value.key == "rate" and "draft is kept" in e.value.text
-    g.check("q", kind="mail", user_confirmed=True)  # another person has their own bucket
+        await g.check("p", kind="mail", user_confirmed=True)
+    assert e.value.key == "rate" and "draft is kept" in e.value.text and "Wait 6 seconds" in e.value.text
+    await g.check("q", kind="mail", user_confirmed=True)  # another person has their own bucket
     t[0] += 6.1
-    g.check("p", kind="mail", user_confirmed=True)  # one refilled
+    await g.check("p", kind="mail", user_confirmed=True)  # one refilled
 
 
-def test_the_guard_wants_the_word_before_the_count():
-    g = Guard()
+async def test_the_guard_wants_the_word_before_the_count(sealer):
+    g = Guard(memory_store(sealer))
     with pytest.raises(ExchangeError) as e:
-        g.check("p", kind="mail", user_confirmed=False, recipients=50)
+        await g.check("p", kind="mail", user_confirmed=False, recipients=50)
     assert e.value.key == "confirm"
     with pytest.raises(ExchangeError) as e:
-        g.check("p", kind="mail", user_confirmed=True, recipients=21)
+        await g.check("p", kind="mail", user_confirmed=True, recipients=21)
     assert e.value.key == "too_many"
 
 

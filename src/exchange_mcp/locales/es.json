@@ -14,6 +14,7 @@
   "note": "Este conector guarda su contraseña cifrada dentro de la conexión de su aplicación y solo la usa para acceder a su buzón. Los correos se envían solo después de que usted lo confirme.",
   "password": "Contraseña",
   "title": "Iniciar sesión en Exchange",
+  "try_shortly": "El inicio de sesión no está disponible por un momento. No se comprobó nada; inténtelo de nuevo en un minuto.",
   "unavailable": "Exchange no respondió. Inténtelo de nuevo en unos minutos.",
   "unknown_client": "Este servidor ya no reconoce la conexión de su aplicación de IA: el servidor se actualizó o cambió su clave. En su aplicación de IA, borre la autorización de este conector y vuelva a conectar.",
   "wrong": "El usuario o la contraseña no se aceptaron."

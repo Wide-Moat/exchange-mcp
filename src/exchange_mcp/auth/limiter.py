@@ -1,20 +1,18 @@
 """Sign-in attempt limits, per login and per client network, over a sliding 15 minutes.
 
-Kept in this replica's memory: with N replicas behind a balancer that does not pin clients, a login gets
-at most N times the limit. Set the limit so that N times it stays below the directory's lockout
-threshold (docs/auth-modes.md).
+The windows live in the shared state store (`state.store`), so every replica counts against the same
+limit: N failed attempts spread over any number of pods are limited at the configured total. Neither the
+login nor the network reaches the store in clear. A store that does not answer raises
+`StoreUnavailable`, and the sign-in page fails closed with "try again shortly".
 """
 
 from __future__ import annotations
 
-import hashlib
 import ipaddress
-import time
-from collections import deque
-from collections.abc import Callable
+
+from exchange_mcp.state.store import StateStore, StoreFull
 
 WINDOW = 15 * 60
-MAX_KEYS = 100_000
 
 
 def network_of(address: str | None) -> str:
@@ -35,31 +33,20 @@ class Limited(Exception):
 
 
 class Limiter:
-    def __init__(self, per_login: int, per_network: int, clock: Callable[[], float] = time.monotonic) -> None:
-        self._limits = {"l": per_login, "n": per_network}
-        self._clock = clock
-        self._seen: dict[str, deque[float]] = {}
+    def __init__(self, store: StateStore, per_login: int, per_network: int) -> None:
+        self._store = store
+        self._per_login = per_login
+        self._per_network = per_network
 
-    def _key(self, kind: str, value: str) -> str:
-        return kind + hashlib.sha256(value.encode()).hexdigest()[:24]  # no login kept in clear
-
-    def take(self, *, login: str, network: str) -> None:
-        """Count one attempt; raise Limited when either limit is already reached (nothing is counted then)."""
-        now = self._clock()
-        keys = {"l": self._key("l", login), "n": self._key("n", network)}
-        for kind, key in keys.items():
-            q = self._seen.get(key)
-            if q is not None:
-                while q and q[0] <= now - WINDOW:
-                    q.popleft()
-                if len(q) >= self._limits[kind]:
-                    raise Limited
-        new = sum(1 for key in keys.values() if key not in self._seen)
-        if len(self._seen) + new > MAX_KEYS:
-            for k in [k for k, q in self._seen.items() if not q or q[-1] <= now - WINDOW]:
-                del self._seen[k]
-            new = sum(1 for key in keys.values() if key not in self._seen)
-            if len(self._seen) + new > MAX_KEYS:
-                raise Limited  # a flood of distinct logins or networks: refuse rather than grow without bound
-        for key in keys.values():
-            self._seen.setdefault(key, deque()).append(now)
+    async def take(self, *, login: str, network: str | None) -> None:
+        """Count one attempt; raise Limited when either limit is already reached (nothing is counted then).
+        `network` None: the client's network is not known, and only the login is counted."""
+        limits = [(f"login\n{login}", self._per_login)]
+        if network is not None:
+            limits.append((f"network\n{network}", self._per_network))
+        try:
+            taken = await self._store.take_window("signin", limits, WINDOW)
+        except StoreFull:
+            raise Limited from None  # a flood of distinct logins or networks: refuse rather than grow
+        if not taken:
+            raise Limited
