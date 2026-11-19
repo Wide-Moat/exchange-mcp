@@ -20,7 +20,7 @@ concurrency:
 
 jobs:
   # Built here rather than by a shared workflow: a public repository cannot call one in a private
-  # repository. Tags as before: sha-<commit> and the branch on main; <x.y.z>, <x.y> and latest on a tag.
+  # repository. Tags: sha-<commit> and the branch on main; <x.y.z> and <x.y> on a tag, never latest.
   image:
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -40,6 +40,9 @@ jobs:
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=sha
+          # no `latest`: an installation pins a version or a digest
+          flavor: |
+            latest=false
       - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         with:
           registry: ghcr.io

@@ -76,15 +76,15 @@ class ExchangeServer(MCPServer):
             )
 
     async def _handle_call_tool(self, ctx: Any, params: Any) -> CallToolResult:  # type: ignore[override]
-        """Counts every call by outcome: ok, refused (the person reads why), error (something crashed). An
+        """Counts every call by outcome: ok, error (refused or failed; the person reads why), crash. An
         unknown tool name is counted as `unknown`: names come from the registry, never from the caller."""
         tool = params.name if params.name in self.specs else "unknown"
         token = _crashed.set(False)
         started = time.perf_counter()
-        result = "error"
+        result = "crash"
         try:
             r = await self._checked_call(ctx, params)
-            result = "error" if _crashed.get() else ("refused" if r.is_error else "ok")
+            result = "crash" if _crashed.get() else ("error" if r.is_error else "ok")
             return r
         finally:
             _crashed.reset(token)

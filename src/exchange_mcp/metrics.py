@@ -33,7 +33,7 @@ HTTP_REQUESTS = Counter(
 HTTP_DURATION = Histogram(
     "mcp_http_request_duration_seconds", "Time to serve an HTTP request", ["server", "route_group"]
 )
-TOOL_CALLS = Counter("mcp_tool_calls", "Tool calls by outcome: ok, refused, error", ["server", "tool", "result"])
+TOOL_CALLS = Counter("mcp_tool_calls", "Tool calls by outcome: ok, error, crash", ["server", "tool", "result"])
 TOOL_DURATION = Histogram(
     "mcp_tool_duration_seconds",
     "Time to run a tool call",

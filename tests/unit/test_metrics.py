@@ -60,16 +60,16 @@ async def test_tool_calls_are_counted_by_outcome(ews, invoke, rt):
     def count(result: str) -> float:
         return metrics.value("mcp_tool_calls_total", tool="send_draft", result=result)
 
-    before = {r: count(r) for r in ("ok", "refused", "error")}
+    before = {r: count(r) for r in ("ok", "error", "crash")}
     ews.on("GetItem", item()).on("SendItem", ok("SendItem"))
     await invoke("send_draft", id="D1", user_confirmed=True)
     await invoke("send_draft", id="D1", user_confirmed=False)
     ews.on("GetItem", lambda s: (_ for _ in ()).throw(RuntimeError("crash")))
     await invoke("send_draft", id="D1", user_confirmed=True)
-    assert {r: count(r) - before[r] for r in before} == {"ok": 1, "refused": 1, "error": 1}
-    before_unknown = metrics.value("mcp_tool_calls_total", tool="unknown", result="refused")
+    assert {r: count(r) - before[r] for r in before} == {"ok": 1, "error": 1, "crash": 1}
+    before_unknown = metrics.value("mcp_tool_calls_total", tool="unknown", result="error")
     await invoke("forward_everything", to="x")
-    assert metrics.value("mcp_tool_calls_total", tool="unknown", result="refused") == before_unknown + 1
+    assert metrics.value("mcp_tool_calls_total", tool="unknown", result="error") == before_unknown + 1
     assert metrics.value("mcp_guard_refusals_total", reason="confirm") >= 1
 
 
