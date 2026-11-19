@@ -6,12 +6,15 @@ Every artefact of the flow is a sealed blob (`keys.seal`) carrying what the next
 |---|---|---|
 | `client_id` | the client's registration | as long as the client keeps it |
 | sign-in request | the client and its authorization parameters | 15 minutes, in the sign-in URL |
-| authorization code | the parameters and the person's credential | 5 minutes, once per replica |
+| authorization code | the parameters and the person's credential | 5 minutes, once across all replicas |
 | access token | the credential | 1 hour (never past the AD FS token it carries) |
 | refresh token | the credential | `password`: 12 hours by default, 24 at most; `adfs`: 30 days |
 
 A token sealed under a key this server no longer holds does not open: the client gets 401 and the
-person signs in again. Any number of replicas serve the same tokens when they share the key.
+person signs in again. Any number of replicas serve the same tokens when they share the key. The one
+thing that must be shared besides the key is which codes were already redeemed: that mark (an HMAC of
+the code, never the code) is kept in the state store, so a code redeemed on one replica is refused on
+every other. A store that does not answer refuses the redemption: the client tries again shortly.
 """
 
 from __future__ import annotations
@@ -31,14 +34,15 @@ from mcp.server.auth.provider import (
 from mcp.shared.auth import OAuthClientInformationFull, OAuthToken
 from pydantic import AnyUrl
 
+from exchange_mcp import metrics
 from exchange_mcp.auth.credential import Credential, person_key
 from exchange_mcp.keys.seal import Sealer
+from exchange_mcp.state.store import StateStore, StoreFull, StoreUnavailable
 
 ACCESS_TTL = 3600
 CODE_TTL = 300
 SIGN_IN_TTL = 15 * 60
 CLIENT_TTL = 10 * 365 * 24 * 3600
-USED_CODES_MAX = 10_000
 
 
 def redirect_allowed(uri: str) -> bool:
@@ -54,6 +58,7 @@ class Provider:
     def __init__(
         self,
         sealer: Sealer,
+        store: StateStore,
         *,
         public_url: str,
         refresh_ttl: int,
@@ -67,14 +72,13 @@ class Provider:
         self._renew = renew  # adfs: refresh the AD FS token inside the credential
         self._client_hosts = client_hosts
         self._clock = clock
-        # In this process only: a second replica would not see a code used here (docs/architecture.md),
-        # which is why one replica is the supported count.
-        self._used_codes: dict[str, float] = {}
+        self._store = store  # which codes were redeemed, shared by every replica
 
     # ---------------------------------------------------------------- clients
     async def get_client(self, client_id: str) -> OAuthClientInformationFull | None:
         body = await self.sealer.open("client", client_id)
         if body is None:
+            metrics.auth_refused("invalid_client")
             return None
         return OAuthClientInformationFull.model_validate({**body["info"], "client_id": client_id})
 
@@ -133,7 +137,8 @@ class Provider:
         self, client: OAuthClientInformationFull, authorization_code: str
     ) -> AuthorizationCode | None:
         p = await self.sealer.open("code", authorization_code)
-        if p is None or p["client_id"] != client.client_id or authorization_code in self._used_codes:
+        if p is None or p["client_id"] != client.client_id:
+            metrics.auth_refused("invalid_grant")
             return None
         return AuthorizationCode(
             code=authorization_code,
@@ -151,15 +156,27 @@ class Provider:
         self, client: OAuthClientInformationFull, authorization_code: AuthorizationCode
     ) -> OAuthToken:
         p = await self.sealer.open("code", authorization_code.code)
-        if p is None or authorization_code.code in self._used_codes:
+        if p is None:
+            metrics.auth_refused("invalid_grant")
             raise TokenError(error="invalid_grant", error_description="authorization code unknown or used")
         now = self._clock()
-        for k in [k for k, exp in self._used_codes.items() if exp < now]:
-            del self._used_codes[k]
-        if len(self._used_codes) >= USED_CODES_MAX:
+        try:
+            # The mark outlives the code by a minute: a code is never redeemable again while it opens.
+            first = await self._store.once("code", authorization_code.code, max(1, p["exp"] - now) + 60)
+        except StoreFull:
             # Forgetting a live code would make it redeemable again: refuse until codes expire instead.
-            raise TokenError(error="invalid_request", error_description="too many sign-ins at once; try again")
-        self._used_codes[authorization_code.code] = authorization_code.expires_at
+            metrics.auth_refused("busy")
+            raise TokenError(
+                error="invalid_request", error_description="too many sign-ins at once; try again"
+            ) from None
+        except StoreUnavailable:
+            metrics.auth_refused("state_unavailable")
+            raise TokenError(
+                error="invalid_request", error_description="the server cannot redeem codes right now; try again shortly"
+            ) from None
+        if not first:
+            metrics.auth_refused("code_reused")
+            raise TokenError(error="invalid_grant", error_description="authorization code unknown or used")
         cred = Credential.from_payload(p["c"])
         if cred is None:
             raise TokenError(error="invalid_grant", error_description="authorization code damaged")
@@ -207,6 +224,7 @@ class Provider:
     async def load_refresh_token(self, client: OAuthClientInformationFull, refresh_token: str) -> RefreshToken | None:
         p = await self.sealer.open("refresh", refresh_token)
         if p is None or p["client_id"] != client.client_id:
+            metrics.auth_refused("invalid_grant")
             return None
         return RefreshToken(
             token=refresh_token,
@@ -221,6 +239,7 @@ class Provider:
         p = await self.sealer.open("refresh", refresh_token.token)
         cred = Credential.from_payload(p["c"]) if p else None
         if p is None or cred is None or p["client_id"] != client.client_id:
+            metrics.auth_refused("invalid_grant")
             raise TokenError(error="invalid_grant", error_description="refresh token unknown or expired")
         if cred.mode == "adfs" and self._renew is not None:
             cred = await self._renew(cred)  # raises TokenError when AD FS refuses: the person signs in again
@@ -238,6 +257,7 @@ class Provider:
         p = await self.sealer.open("access", token)
         cred = Credential.from_payload(p["c"]) if p else None
         if p is None or cred is None:
+            metrics.auth_refused("invalid_token")
             return None
         return AccessToken(
             token=token,

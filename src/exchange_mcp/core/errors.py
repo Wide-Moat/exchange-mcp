@@ -20,6 +20,9 @@ MESSAGES: dict[str, str] = {
     "area_off": "The {area} tools are switched off on this server.",
     "forbidden": "Exchange does not let you do this. {outcome}",
     "not_found": "It does not exist, or it is not yours to see. Find it again with the tool that lists it.",
+    "state_unavailable": (
+        "The server cannot count this action against the person's allowance right now. Try again in a minute. {outcome}"
+    ),
     "busy": "Exchange is busy right now. Try again in {seconds}. Nothing was done.",
     # The EWS code goes to the log beside the reference, not to the person (manifesto rule 11).
     "failed": "Exchange refused the request. {outcome} Reference {ref}.",

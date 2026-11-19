@@ -1,6 +1,6 @@
 [project]
 name = "exchange-mcp"
-version = "0.1.7"
+version = "0.2.0"
 description = "On-premises Exchange connector for AI agents: one person's mail, calendar, contacts and tasks over MCP, through EWS."
 readme = "README.md"
 license = "Apache-2.0"
@@ -14,7 +14,9 @@ dependencies = [
     "nh3>=0.3.0",
     "css-inline>=0.17.0",
     "pydantic>=2.14.3",
+    "prometheus-client>=0.26.0",
     "pyspnego>=0.11.2",
+    "redis>=8.1.0",
     "uvicorn>=0.54.0",
 ]
 

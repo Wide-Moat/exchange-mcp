@@ -20,12 +20,16 @@ spec:
   rules:
     - host: {{ $host | quote }}
       http:
+        # Only what people and MCP clients use: never `/`, so the health and readiness answers and anything
+        # added later stay inside the cluster.
         paths:
-          - path: /
+          {{- range list "/mcp" "/.well-known/" "/authorize" "/token" "/register" "/signin" "/static/" "/files/" "/adfs/" }}
+          - path: {{ . }}
             pathType: Prefix
             backend:
               service:
-                name: {{ include "exchange-mcp.fullname" . }}
+                name: {{ include "exchange-mcp.fullname" $ }}
                 port:
                   name: http
+          {{- end }}
 {{- end }}

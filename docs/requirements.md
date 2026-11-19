@@ -143,6 +143,10 @@ Upstream: `SetUserOofSettings` for the person's own address only.
 | more than 20 recipients in one draft | tests/unit/test_mail.py::test_more_than_twenty_recipients_is_refused |
 | a distribution list as a recipient | tests/unit/test_mail.py::test_a_distribution_list_recipient_is_refused |
 | an 11th outward action within the bucket | tests/unit/test_core.py::test_the_bucket_refuses_the_eleventh_action |
+| an 11th outward action when the first ten went through other replicas | tests/unit/test_replicas.py::test_the_send_bucket_is_shared_across_replicas |
+| an outward action while the state store does not answer (nothing is sent uncounted) | tests/unit/test_replicas.py::test_sending_fails_closed_when_the_store_is_down |
+| an upload while the state store does not answer | tests/unit/test_replicas.py::test_an_upload_fails_closed_when_the_store_is_down |
+| a second upload through a link while the first runs | tests/unit/test_links.py::test_an_upload_link_takes_one_upload_at_a_time |
 | a recipient name that matches several people | tests/unit/test_mail.py::test_an_ambiguous_recipient_lists_candidates |
 | HTML that keeps a script, an event handler or a `javascript:` URL after the pipeline | tests/unit/test_html.py::test_dangerous_html_does_not_survive |
 | a relative URL in outgoing HTML | tests/unit/test_html.py::test_relative_urls_are_refused |
@@ -242,9 +246,18 @@ Moves a task to Deleted Items. Upstream: `DeleteItem DeleteType=MoveToDeletedIte
 | an expired access or refresh token | tests/unit/test_oauth.py::test_tokens_expire |
 | a code or refresh token of another client | tests/unit/test_oauth.py::test_a_code_belongs_to_its_client |
 | a code used twice | tests/unit/test_oauth.py::test_a_code_is_used_once |
+| a code used once on one replica and again on another | tests/unit/test_replicas.py::test_a_code_redeemed_on_one_replica_is_refused_on_another |
+| a code redeemed while the state store does not answer | tests/unit/test_replicas.py::test_redeeming_a_code_fails_closed_when_the_store_is_down |
 | a code exchange with a wrong PKCE verifier | tests/unit/test_http.py::test_a_wrong_pkce_verifier_is_refused |
 | a redirect URI that is not https (except loopback) or differs from the registration | tests/unit/test_oauth.py::test_redirect_uris_are_exact |
 | a 6th password attempt for one login within 15 minutes, or a 21st from one network | tests/unit/test_signin.py::test_password_attempts_are_limited |
+| attempts past the limit spread over several replicas | tests/unit/test_replicas.py::test_sign_in_attempts_are_counted_across_replicas |
+| a password attempt while the state store does not answer (it would go uncounted) | tests/unit/test_replicas.py::test_sign_in_fails_closed_when_the_store_is_down |
+| a login, an address or a client address kept in clear in the state store | tests/unit/test_state_contract.py::test_no_identifier_reaches_the_store_in_clear |
+| a state store password from the environment, or from a file others may read | tests/unit/test_config.py::test_a_store_password_comes_from_a_closed_file_only |
+| a log line that is not one JSON object, from any process of the image | tests/unit/test_logs_json.py::test_the_running_server_writes_only_json |
+| an exception's message in a log line | tests/unit/test_logs_json.py::test_an_uncaught_exception_is_json_with_its_message_withheld |
+| metrics on the public port | tests/unit/test_metrics.py::test_the_public_port_has_no_metrics |
 | a login whose domain is not the configured one, before any attempt reaches Exchange | tests/unit/test_signin.py::test_a_login_of_another_domain_is_refused |
 | one person counted as two because the login was typed in another form | tests/unit/test_signin.py::test_every_login_form_is_one_person |
 | a sign-in answer that differs between an unknown login and a wrong password | tests/unit/test_signin.py::test_unknown_and_wrong_look_the_same |

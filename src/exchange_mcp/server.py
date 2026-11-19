@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import inspect
 import logging
+import time
+from contextvars import ContextVar
 from typing import Any
 
 from mcp.server.mcpserver import MCPServer
@@ -11,7 +13,7 @@ from mcp.server.mcpserver.exceptions import ToolError, UnexpectedToolError
 from mcp.types import CallToolResult, TextContent, ToolAnnotations
 from pydantic import ValidationError
 
-from exchange_mcp import __version__
+from exchange_mcp import __version__, metrics
 from exchange_mcp.core.errors import ExchangeError
 from exchange_mcp.registry import ToolSpec, enabled
 
@@ -28,6 +30,10 @@ INSTRUCTIONS = (
 CONFIRMATION_PARAMS = frozenset({"user_confirmed"})
 # Arguments that are ids are strings; a JSON number would be rounded by JavaScript clients.
 ID_PARAMS = frozenset({"id", "ids", "message", "folder_id"})
+
+
+# Set by call_tool when a tool crashed, so the call is counted as an error rather than a refusal.
+_crashed: ContextVar[bool] = ContextVar("crashed", default=False)
 
 
 def annotations(s: ToolSpec) -> ToolAnnotations:
@@ -70,6 +76,22 @@ class ExchangeServer(MCPServer):
             )
 
     async def _handle_call_tool(self, ctx: Any, params: Any) -> CallToolResult:  # type: ignore[override]
+        """Counts every call by outcome: ok, refused (the person reads why), error (something crashed). An
+        unknown tool name is counted as `unknown`: names come from the registry, never from the caller."""
+        tool = params.name if params.name in self.specs else "unknown"
+        token = _crashed.set(False)
+        started = time.perf_counter()
+        result = "error"
+        try:
+            r = await self._checked_call(ctx, params)
+            result = "error" if _crashed.get() else ("refused" if r.is_error else "ok")
+            return r
+        finally:
+            _crashed.reset(token)
+            metrics.TOOL_CALLS.labels(metrics.SERVER, tool, result).inc()
+            metrics.TOOL_DURATION.labels(metrics.SERVER, tool).observe(time.perf_counter() - started)
+
+    async def _checked_call(self, ctx: Any, params: Any) -> CallToolResult:
         name = params.name
         args = params.arguments or {}
         if name not in self.specs:
@@ -111,6 +133,7 @@ class ExchangeServer(MCPServer):
                 log.info("tool %s refused: %s", name, cause.key)
                 raise _Sentence(cause.text) from None
             if isinstance(wrapped, UnexpectedToolError):
+                _crashed.set(True)
                 log.error("tool %s crashed: %s", name, type(cause).__name__ if cause else "unknown")
                 raise _Sentence(ExchangeError("unexpected").text) from None
             raise

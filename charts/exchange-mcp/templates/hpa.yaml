@@ -1,0 +1,31 @@
+{{- if .Values.autoscaling.enabled }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "exchange-mcp.fullname" . }}
+  labels: {{- include "exchange-mcp.labels" . | nindent 4 }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "exchange-mcp.fullname" . }}
+  minReplicas: {{ .Values.autoscaling.minReplicas }}
+  maxReplicas: {{ .Values.autoscaling.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.autoscaling.targetCPUUtilizationPercentage }}
+    {{- with .Values.autoscaling.inFlightPerPod }}
+    # requests being served per pod, from the pods' own metric through prometheus-adapter
+    - type: Pods
+      pods:
+        metric:
+          name: mcp_http_requests_in_flight
+        target:
+          type: AverageValue
+          averageValue: {{ . | quote }}
+    {{- end }}
+{{- end }}

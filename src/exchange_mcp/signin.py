@@ -25,11 +25,13 @@ from urllib.parse import urlsplit
 from starlette.requests import Request
 from starlette.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 
+from exchange_mcp import metrics
 from exchange_mcp.auth.limiter import Limited, Limiter, network_of
 from exchange_mcp.auth.login import BadLogin, normalise
 from exchange_mcp.auth.password import SignInFailed, check
 from exchange_mcp.core.context import runtime
 from exchange_mcp.core.errors import ExchangeError
+from exchange_mcp.state.store import StoreUnavailable
 
 log = logging.getLogger("exchange_mcp.signin")
 
@@ -44,8 +46,8 @@ class SignIn:
     def __init__(self, provider, adfs=None) -> None:
         self.provider = provider
         self.adfs = adfs  # auth.adfs.Adfs in adfs mode
-        s = runtime().settings
-        self.limiter = Limiter(s.attempts_per_login, s.attempts_per_network)
+        rt = runtime()
+        self.limiter = Limiter(rt.store, rt.settings.attempts_per_login, rt.settings.attempts_per_network)
 
     async def page(self, request: Request) -> Response:
         lang = pick_lang(request.headers.get("accept-language", ""))
@@ -117,25 +119,39 @@ class SignIn:
             login = None
         if login is None or not password or len(password) > MAX_PASSWORD:
             # Same answer as a wrong password: the page never says whether a login exists.
+            metrics.signin("wrong")
             return _page(lang, form=again, error=t["wrong"], status=400, redirect=_origin(p))
+        # Behind a proxy the peer is the proxy: the client's own address is known only through the proxies
+        # the operator trusts (EXCHANGE_MCP_TRUSTED_PROXIES); without them there is no per-network limit,
+        # rather than one shared by everybody behind the ingress.
+        network = network_of(request.client.host if request.client else None) if s.trusted_proxies else None
         try:
-            self.limiter.take(login=login, network=network_of(request.client.host if request.client else None))
+            await self.limiter.take(login=login, network=network)
         except Limited:
             log.info("sign-in refused: attempt limit")
+            metrics.signin("limited")
             return _page(lang, form=again, error=t["limited"], status=429, redirect=_origin(p))
+        except StoreUnavailable:
+            # Without the count there is no limit: refuse rather than let attempts through uncounted.
+            log.warning("sign-in refused: state store unavailable")
+            metrics.signin("error")
+            return _page(lang, form=again, error=t["try_shortly"], status=503, redirect=_origin(p))
         try:
             cred = await check(runtime().http, s.ews_url, login, password)
         except SignInFailed:
             log.info("sign-in refused: not accepted")
+            metrics.signin("wrong")
             return _page(lang, form=again, error=t["wrong"], status=400, redirect=_origin(p))
         except ExchangeError as e:
             log.info("sign-in failed: %s", e.key)
+            metrics.signin("error")
             return _page(lang, form=again, error=t["unavailable"], status=502, redirect=_origin(p))
         try:
             redirect = await self.provider.complete_sign_in(rid, cred)
         except LookupError:
             return _page(lang, heading=t["h1_again"], error=t["expired"], status=410)
         log.info("sign-in completed")
+        metrics.signin("ok")
         return RedirectResponse(redirect, status_code=302)
 
 

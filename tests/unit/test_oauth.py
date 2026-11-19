@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 
 import pytest
+from conftest import memory_store
 from mcp.server.auth.provider import AuthorizationParams, RegistrationError, TokenError
 from mcp.shared.auth import OAuthClientInformationFull
 from pydantic import AnyUrl
@@ -19,7 +20,14 @@ CRED = Credential("password", "alex@corp.example", "alex@corp.example", "Alex", 
 def make(clock=None, refresh_ttl=12 * 3600):
     now = clock or [1000.0]
     sealer = LocalSealer([("k1", os.urandom(32))], clock=lambda: now[0])
-    return Provider(sealer, public_url="https://mcp.example.com", refresh_ttl=refresh_ttl, clock=lambda: now[0]), now
+    provider = Provider(
+        sealer,
+        memory_store(sealer),
+        public_url="https://mcp.example.com",
+        refresh_ttl=refresh_ttl,
+        clock=lambda: now[0],
+    )
+    return provider, now
 
 
 async def client(p: Provider, uri: str = "https://client.example.org/cb") -> OAuthClientInformationFull:
@@ -98,9 +106,9 @@ async def test_a_code_is_used_once():
     code = await code_for(p, c)
     loaded = await p.load_authorization_code(c, code)
     await p.exchange_authorization_code(c, loaded)
-    assert await p.load_authorization_code(c, code) is None
-    with pytest.raises(TokenError):
-        await p.exchange_authorization_code(c, loaded)
+    with pytest.raises(TokenError) as e:
+        await p.exchange_authorization_code(c, await p.load_authorization_code(c, code))
+    assert e.value.error == "invalid_grant"
 
 
 @pytest.mark.parametrize(
@@ -124,8 +132,10 @@ async def test_the_access_token_carries_the_credential_sealed():
 async def test_an_operator_can_limit_which_clients_register():
     import os
 
+    sealer = LocalSealer([("k1", os.urandom(32))])
     p = Provider(
-        LocalSealer([("k1", os.urandom(32))]),
+        sealer,
+        memory_store(sealer),
         public_url="https://mcp.example.com",
         refresh_ttl=3600,
         client_hosts=frozenset({"chat.corp.example"}),

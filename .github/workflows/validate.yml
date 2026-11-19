@@ -162,6 +162,17 @@ jobs:
         run: |
           python -m pip install --require-hashes -r requirements-test.lock
           python -m pip install --no-deps -e .
+      # Real servers for the state-store contract suite: Valkey and Redis, standalone and behind Sentinel,
+      # with and without a password. No fake: the run fails below if any test was skipped.
+      - name: Valkey, Redis and their Sentinels
+        run: |
+          set -euo pipefail
+          scripts/stores-test.sh up | sed 's/^export //' > stores.env
+          grep -q '^REDIS_TEST_SENTINELS=' stores.env
+          while IFS= read -r line; do
+            case "$line" in VALKEY_TEST_PASSWORD=*) echo "::add-mask::${line#*=}";; esac
+            echo "$line" >> "$GITHUB_ENV"
+          done < stores.env
       - name: format and lint
         run: |
           python -m ruff format --check src tests scripts
@@ -174,7 +185,11 @@ jobs:
         run: |
           defined=$(grep -rhoE '^\s*(async )?def test_[a-z0-9_]+' tests | wc -l | tr -d ' ')
           ran=$(python scripts/junit_ran.py report.xml)
-          echo "$defined test functions on disk, $ran test cases ran"
+          skipped=$(python scripts/junit_ran.py report.xml --skipped)
+          echo "$defined test functions on disk, $ran test cases ran, $skipped skipped"
+          if [ "$skipped" -ne 0 ]; then
+            echo "a skipped test is one that did not run here: the Valkey servers are missing"; exit 1
+          fi
           if [ "$defined" -lt 150 ]; then
             echo "fewer test functions than this repository has: the check itself is broken"; exit 2
           fi
@@ -249,8 +264,17 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: the image builds
-        run: docker build -t exchange-mcp:ci .
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      # publish.yml pushes both architectures as one manifest list; both must build before it runs
+      - name: the image builds for amd64 and arm64
+        run: |
+          set -euo pipefail
+          for arch in amd64 arm64; do
+            docker buildx build --platform "linux/${arch}" --load -t "exchange-mcp:ci-${arch}" .
+            docker run --rm --platform "linux/${arch}" --entrypoint python "exchange-mcp:ci-${arch}" \
+              -c 'import platform, exchange_mcp, redis, prometheus_client; print(platform.machine())'
+          done
 
   # The chart renders, refuses what it must, and in a real cluster delivers the key the way it promises:
   # the Secret in the init container only, no key in the environment, the key kept across a container
@@ -285,11 +309,40 @@ jobs:
         run: |
           set -euo pipefail
           ok=(--set publicUrl=https://mcp.example.com --set exchange.ewsUrl=https://mail.example.com/EWS/Exchange.asmx
-              --set auth.password.loginDomain=corp.example --set key.existingSecret=exchange-mcp-key)
+              --set auth.password.loginDomain=corp.example --set key.existingSecret=exchange-mcp-key
+              --set state.url=redis://valkey:6379/0)
           helm lint --strict charts/exchange-mcp "${ok[@]}"
           helm template t charts/exchange-mcp "${ok[@]}" > rendered.yaml
           /tmp/kubeconform -strict -summary rendered.yaml
           grep -q 'name: stage-keys' rendered.yaml
+          grep -q 'path: /readyz' rendered.yaml
+          test "$(grep -c '^kind: PodDisruptionBudget$' rendered.yaml)" = 1
+          # one pod, no store: allowed, and the server keeps the state in memory
+          helm template t charts/exchange-mcp "${ok[@]}" --set state.url= --set replicaCount=1 > one.yaml
+          /tmp/kubeconform -strict -summary one.yaml
+          if grep -q EXCHANGE_MCP_STATE one.yaml; then echo "a store is configured with none set"; exit 1; fi
+          # Sentinel with a password Secret, the HPA on CPU and in-flight requests, the ServiceMonitor
+          helm template t charts/exchange-mcp "${ok[@]}" --set state.url= \
+            --set 'state.sentinel.hosts={s-0:26379,s-1:26379}' --set state.existingSecret=store \
+            --set autoscaling.enabled=true --set autoscaling.inFlightPerPod=20 \
+            --set metrics.serviceMonitor.enabled=true > scaled.yaml
+          /tmp/kubeconform -strict -summary -skip ServiceMonitor scaled.yaml
+          test "$(grep -c '^kind: HorizontalPodAutoscaler$' scaled.yaml)" = 1
+          test "$(grep -c '^kind: ServiceMonitor$' scaled.yaml)" = 1
+          grep -q 'name: mcp_http_requests_in_flight' scaled.yaml
+          grep -q -- '- /secret-state:state-' scaled.yaml
+          grep -q 'value: "s-0:26379,s-1:26379"' scaled.yaml
+          grep -q 'value: /run/exchange-mcp/state-sentinelPassword' scaled.yaml
+          if grep -q '^  replicas:' scaled.yaml; then echo "replicas set although the HPA owns them"; exit 1; fi
+          # probes on the metrics port; no CPU limit anywhere
+          python3 scripts/chart_rendered.py rendered.yaml
+          python3 scripts/chart_rendered.py scaled.yaml
+          # the Ingress routes named paths only, never /
+          helm template t charts/exchange-mcp "${ok[@]}" --set ingress.enabled=true > paths.yaml
+          if grep -Eq 'path: /$' paths.yaml; then echo "the Ingress routes /"; exit 1; fi
+          for p in /mcp /.well-known/ /authorize /token /register /signin /static/ /files/ /adfs/; do
+            grep -q "path: $p\$" paths.yaml || { echo "the Ingress does not route $p"; exit 1; }
+          done
           # the optional Ingress renders, is valid, and takes its host from publicUrl
           helm template t charts/exchange-mcp "${ok[@]}" --set ingress.enabled=true --set ingress.className=nginx \
             --set ingress.tlsSecretName=mcp-tls > ingress.yaml
@@ -304,7 +357,13 @@ jobs:
           }
           refuses "publicUrl is required"
           refuses "key.existingSecret is required" "${ok[@]}" --set key.existingSecret=
-          refuses "replicaCount must be 1" "${ok[@]}" --set replicaCount=2
+          refuses "needs state.url or state.sentinel.hosts" "${ok[@]}" --set state.url=
+          refuses "needs state.url or state.sentinel.hosts" "${ok[@]}" --set state.url= --set replicaCount=1 \
+            --set autoscaling.enabled=true
+          refuses "key.provider memory holds one key per pod" "${ok[@]}" --set key.provider=memory
+          refuses "two different stores" "${ok[@]}" --set 'state.sentinel.hosts={s:26379}'
+          refuses "state.existingSecret is set but no store is" "${ok[@]}" --set state.url= --set replicaCount=1 \
+            --set state.existingSecret=store
       - name: build the image for the cluster
         run: docker build -t exchange-mcp:e2e .
       - name: the image reports the chart's version
@@ -315,11 +374,20 @@ jobs:
           want=$(sed -n 's/^appVersion: "\(.*\)"$/\1/p' charts/exchange-mcp/Chart.yaml)
           echo "image ${got}, chart appVersion ${want}"
           test -n "$want" && test "$got" = "$want"
-      - name: a cluster
+      - name: a cluster, with metrics-server for the HPA
         run: |
           set -euo pipefail
           kind create cluster --name e2e --wait 120s
           kind load docker-image exchange-mcp:e2e --name e2e
+          curl -fsSL --retry 3 -o /tmp/metrics-server.yaml "$METRICS_SERVER_URL"
+          echo "$METRICS_SERVER_SHA256  /tmp/metrics-server.yaml" | sha256sum -c -
+          kubectl apply -f /tmp/metrics-server.yaml
+          # kind's kubelets serve a self-signed certificate
+          kubectl -n kube-system patch deploy metrics-server --type=json \
+            -p '[{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--kubelet-insecure-tls"}]'
+        env:
+          METRICS_SERVER_URL: https://github.com/kubernetes-sigs/metrics-server/releases/download/v0.7.2/components.yaml
+          METRICS_SERVER_SHA256: f103539a54ed72efe66616afc74a8bfaed651703cb3918797599046af5617441
       - name: the chart in the cluster
         run: IMAGE=exchange-mcp:e2e scripts/chart-e2e.sh
       - name: what the cluster saw
@@ -328,6 +396,33 @@ jobs:
           kubectl -n exchange-mcp-e2e get pods -o wide || true
           kubectl -n exchange-mcp-e2e describe pods | tail -60 || true
           kubectl -n exchange-mcp-e2e logs -l app.kubernetes.io/instance=e2e --all-containers --tail=80 || true
+
+  # The replica checks of scripts/chart-e2e.sh against 0.1.7, the last image that kept its state in each
+  # process: every one of them must fail there. A check that passes against it proves nothing.
+  chart-known-bad:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        shell: bash
+    env:
+      OLD: ghcr.io/wide-moat/exchange-mcp@sha256:4e243d7a379e312540028b1ee1a60f7d7d8ab71bf74074a19e1a089747505287
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: a cluster with the 0.1.7 image
+        run: |
+          set -euo pipefail
+          docker pull -q "$OLD" && docker tag "$OLD" exchange-mcp:known-bad
+          kind create cluster --name e2e --wait 120s
+          kind load docker-image exchange-mcp:known-bad --name e2e
+      - name: every replica check fails against it
+        run: IMAGE=exchange-mcp:known-bad KNOWN_BAD=1 scripts/chart-e2e.sh
+      - name: what the cluster saw
+        if: failure()
+        run: |
+          kubectl -n exchange-mcp-e2e get pods -o wide || true
+          kubectl -n exchange-mcp-e2e logs -l app.kubernetes.io/instance=e2e --all-containers --tail=40 || true
 
   probe:
     # The built image starts as a non-root user, refuses a key in the environment, and serves OAuth

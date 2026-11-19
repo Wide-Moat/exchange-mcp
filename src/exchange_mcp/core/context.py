@@ -32,13 +32,20 @@ class Runtime:
     settings: Settings
     http: httpx.AsyncClient
     sealer: Sealer
-    guard: Guard = field(default_factory=Guard)
+    store: Any = None  # state.store.StateStore; in this process when not given
     clock: Callable[[], float] = time.time
     cursors: Cursors = field(init=False)
+    guard: Guard = field(init=False)
     links: Any = None  # links.Links, set by the app
+    health: dict = field(default_factory=dict)  # path -> handler, set by the app
 
     def __post_init__(self) -> None:
+        if self.store is None:
+            from exchange_mcp.state.store import MemoryStore, Namer
+
+            self.store = MemoryStore(Namer(self.sealer.derive, "exchange-mcp:"))
         self.cursors = Cursors(self.sealer)
+        self.guard = Guard(self.store)
 
 
 _RUNTIME: Runtime | None = None
@@ -65,8 +72,10 @@ class Call:
     ews: Ews
     rt: Runtime
 
-    def guard(self, *, kind: str, user_confirmed: bool | None, recipients: int = 0, target: str | None = None) -> dict:
-        return self.rt.guard.check(
+    async def guard(
+        self, *, kind: str, user_confirmed: bool | None, recipients: int = 0, target: str | None = None
+    ) -> dict:
+        return await self.rt.guard.check(
             self.person, kind=kind, user_confirmed=user_confirmed, recipients=recipients, target=target
         )
 

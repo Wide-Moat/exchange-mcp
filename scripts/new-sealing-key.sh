@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
-# A new sealing key for exchange-mcp, written by CI into the Secret the chart stages.
+# A sealing key for exchange-mcp, written into the Secret the chart stages. Run it once, when the
+# installation is created; the key then stays, and deploys keep every session. Running it again is a
+# rotation in one step: pass the printed key id as key.revision, and everyone signs in again once.
 #
 #   kid=$(scripts/new-sealing-key.sh <namespace> <secret name> [secret key, default "key"])
 #   helm upgrade --install … --set key.existingSecret=<secret name> --set key.revision="$kid"
 #
 # The key never appears in this script's output, its arguments or the arguments of the commands it runs:
 # it goes from openssl to a 0600 file in a private directory, and kubectl reads that file. Other keys of
-# the same Secret (a Vault token, an AD FS key) are kept. Everyone signs in again after the new key is
-# rolled out, once. It prints the key id, which is not secret, for key.revision.
+# the same Secret (a Vault token, an AD FS key) are kept. It prints the key id, which is not secret.
 set -euo pipefail
 ns=${1:?usage: new-sealing-key.sh <namespace> <secret name> [secret key]}
 name=${2:?usage: new-sealing-key.sh <namespace> <secret name> [secret key]}

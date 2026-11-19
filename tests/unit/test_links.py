@@ -99,3 +99,17 @@ async def test_uploading_the_same_file_twice_attaches_it_once(ews, cred):
     second = await client.put(path, content=b"hello")
     assert first.status_code == 200 and second.status_code == 200 and second.json().get("already") is True
     assert ews.ops().count("CreateAttachment") == 1
+
+
+async def test_an_upload_link_takes_one_upload_at_a_time(rt, cred):
+    """The mark is in the shared store: while one upload runs, the same link is refused on any replica,
+    and it is free again when the upload ends."""
+    from exchange_mcp.auth.credential import person_key
+
+    link = await rt.links.upload(cred, person_key(cred.login), "D1", "attach", "a.pdf")
+    lid = link["url"].rsplit("/", 1)[1]
+    first = await rt.links.claim_upload(lid)
+    assert first is not None
+    assert await rt.links.claim_upload(lid) is None
+    await rt.links.release_upload(first["u"])
+    assert await rt.links.claim_upload(lid) is not None

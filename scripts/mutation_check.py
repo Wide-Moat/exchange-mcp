@@ -24,7 +24,13 @@ MUTATIONS = [
         [("if user_confirmed is not True:", "if False:")],
         "tests/unit/test_core.py",
     ),
-    ("the bucket", "core/guard.py", [("if b.tokens < 1:", "if False:")], "tests/unit/test_core.py"),
+    ("the bucket", "core/guard.py", [("        if not taken:\n", "        if False:\n")], "tests/unit/test_core.py"),
+    (
+        "the in-process bucket runs out",
+        "state/store.py",
+        [("        taken = tokens >= 1\n", "        taken = True\n")],
+        "tests/unit/test_core.py",
+    ),
     (
         "the recipient cap in the guard",
         "core/guard.py",
@@ -60,8 +66,8 @@ MUTATIONS = [
         [
             ('        c.rt.guard.confirmed(kind="mail", user_confirmed=user_confirmed)\n', ""),
             (
-                'receipt = c.guard(kind="mail", user_confirmed=user_confirmed,',
-                'receipt = c.guard(kind="mail", user_confirmed=True,',
+                'receipt = await c.guard(kind="mail", user_confirmed=user_confirmed,',
+                'receipt = await c.guard(kind="mail", user_confirmed=True,',
             ),
         ],
         "tests/unit/test_mail.py",
@@ -189,11 +195,7 @@ MUTATIONS = [
         "a code is used once",
         "oauth/provider.py",
         [
-            (
-                'if p is None or p["client_id"] != client.client_id or authorization_code in self._used_codes:',
-                'if p is None or p["client_id"] != client.client_id:',
-            ),
-            ("if p is None or authorization_code.code in self._used_codes:", "if p is None:"),
+            ("        if not first:\n", "        if False:\n"),
         ],
         "tests/unit/test_oauth.py",
     ),
@@ -202,8 +204,11 @@ MUTATIONS = [
         "oauth/provider.py",
         [
             (
-                'if p is None or p["client_id"] != client.client_id or authorization_code in self._used_codes:',
-                "if p is None or authorization_code in self._used_codes:",
+                '        if p is None or p["client_id"] != client.client_id:\n'
+                '            metrics.auth_refused("invalid_grant")\n'
+                "            return None\n        return AuthorizationCode(",
+                '        if p is None:\n            metrics.auth_refused("invalid_grant")\n'
+                "            return None\n        return AuthorizationCode(",
             )
         ],
         "tests/unit/test_oauth.py",
@@ -217,7 +222,13 @@ MUTATIONS = [
     (
         "sign-in attempts are limited",
         "auth/limiter.py",
-        [("if len(q) >= self._limits[kind]:", "if False:")],
+        [("        if not taken:\n            raise Limited", "        if False:\n            raise Limited")],
+        "tests/unit/test_signin.py",
+    ),
+    (
+        "the in-process window counts to its limit",
+        "state/store.py",
+        [("                if len(q) >= limit:\n", "                if False:\n")],
         "tests/unit/test_signin.py",
     ),
     (
@@ -294,8 +305,8 @@ MUTATIONS = [
         [
             ('            c.rt.guard.confirmed(kind="invite", user_confirmed=user_confirmed)\n', "            pass\n"),
             (
-                'receipt = c.guard(kind="invite", user_confirmed=user_confirmed, recipients=told)',
-                'receipt = c.guard(kind="invite", user_confirmed=True, recipients=told)',
+                'receipt = await c.guard(kind="invite", user_confirmed=user_confirmed, recipients=told)',
+                'receipt = await c.guard(kind="invite", user_confirmed=True, recipients=told)',
             ),
         ],
         "tests/unit/test_calendar.py",
@@ -305,8 +316,8 @@ MUTATIONS = [
         "tools/calendar.py",
         [
             (
-                'receipt = c.guard(kind="cancel", user_confirmed=user_confirmed, recipients=told)',
-                'receipt = c.guard(kind="cancel", user_confirmed=True, recipients=told)',
+                'receipt = await c.guard(kind="cancel", user_confirmed=user_confirmed, recipients=told)',
+                'receipt = await c.guard(kind="cancel", user_confirmed=True, recipients=told)',
             )
         ],
         "tests/unit/test_calendar.py",
@@ -314,7 +325,7 @@ MUTATIONS = [
     (
         "answering an invitation draws from the bucket",
         "tools/calendar.py",
-        [('receipt = c.rt.guard.spend(c.person, kind="invite") if send_response else {}', "receipt = {}")],
+        [('receipt = await c.rt.guard.spend(c.person, kind="invite") if send_response else {}', "receipt = {}")],
         "tests/unit/test_calendar.py",
     ),
     (
@@ -372,14 +383,14 @@ MUTATIONS = [
     ),
     (
         "the limiter does not grow without bound",
-        "auth/limiter.py",
-        [("                raise Limited  # a flood", "                pass  # a flood")],
+        "state/store.py",
+        [("                raise StoreFull  # a flood", "                pass  # a flood")],
         "tests/unit/test_review_fixes.py",
     ),
     (
         "the bucket table does not grow without bound",
-        "core/guard.py",
-        [('                raise ExchangeError("busy", seconds=60)', "                pass")],
+        "state/store.py",
+        [("                raise StoreFull\n        tokens, at", "                pass\n        tokens, at")],
         "tests/unit/test_review_fixes.py",
     ),
     (
@@ -413,12 +424,12 @@ MUTATIONS = [
     ),
     (
         "a live code is never forgotten",
-        "oauth/provider.py",
+        "state/store.py",
         [
             (
-                '            raise TokenError(error="invalid_request", '
-                'error_description="too many sign-ins at once; try again")',
-                "            self._used_codes.clear()",
+                "                # Forgetting a live mark would let a code be redeemed twice: refuse instead.\n"
+                "                raise StoreFull",
+                "                self._once.clear()",
             )
         ],
         "tests/unit/test_review_fixes.py",
@@ -567,6 +578,166 @@ MUTATIONS = [
             )
         ],
         "tests/unit/test_qa_mail.py",
+    ),
+    # ---------------------------------------------------------------- many replicas (0.2.0)
+    (
+        "shared: a code is marked once in Valkey",
+        "state/remote.py",
+        [('self._r.set(key, b"1", nx=True, px=ms)', 'self._r.set(key, b"1", px=ms)')],
+        "tests/unit/test_state_contract.py",
+    ),
+    (
+        "shared: the Valkey window stops at its limit",
+        "state/remote.py",
+        [("  if redis.call('ZCARD', k) >= tonumber(ARGV[i + 2]) then return 0 end\n", "")],
+        "tests/unit/test_state_contract.py",
+    ),
+    (
+        "a store out of memory refuses the window script before it runs",
+        "state/remote.py",
+        [('WINDOW = """#!lua\n', 'WINDOW = """\n')],
+        "tests/unit/test_state_contract.py",
+    ),
+    (
+        "shared: the Valkey bucket runs out",
+        "state/remote.py",
+        [("if tokens >= 1 then", "if true then")],
+        "tests/unit/test_state_contract.py",
+    ),
+    (
+        "shared: a code redeemed on one replica is refused on another",
+        "app.py",
+        [
+            (
+                "        store,\n        public_url",
+                "        MemoryStore(Namer(sealer.derive, 'own:')),\n        public_url",
+            ),
+            (
+                "from exchange_mcp.state.store import Namer, StateStore",
+                "from exchange_mcp.state.store import MemoryStore, Namer, StateStore",
+            ),
+        ],
+        "tests/unit/test_replicas.py",
+    ),
+    (
+        "shared: sign-in attempts on one replica count on another",
+        "signin.py",
+        [
+            (
+                "        self.limiter = Limiter(rt.store,",
+                "        from exchange_mcp.state.store import MemoryStore, Namer\n\n"
+                "        self.limiter = Limiter(MemoryStore(Namer(rt.sealer.derive, 'own:')),",
+            )
+        ],
+        "tests/unit/test_replicas.py",
+    ),
+    (
+        "no identifier reaches the store in clear",
+        "state/store.py",
+        [('        return f"{self.prefix}{ns}:{mac}"', '        return f"{self.prefix}{ns}:{ident}"')],
+        "tests/unit/test_state_contract.py",
+    ),
+    (
+        "fail closed: sign-in refuses when the store is down",
+        "auth/limiter.py",
+        [
+            (
+                "from exchange_mcp.state.store import StateStore, StoreFull",
+                "from exchange_mcp.state.store import StateStore, StoreFull, StoreUnavailable",
+            ),
+            (
+                "        except StoreFull:\n            raise Limited",
+                "        except StoreUnavailable:\n            return\n"
+                "        except StoreFull:\n            raise Limited",
+            ),
+        ],
+        "tests/unit/test_replicas.py",
+    ),
+    (
+        "fail closed: sending refuses when the store is down",
+        "core/guard.py",
+        [
+            (
+                '            metrics.guard_refused("state_unavailable")\n            raise ExchangeError(',
+                "            taken, tokens = True, 0.0\n            if False:\n                raise ExchangeError(",
+            )
+        ],
+        "tests/unit/test_replicas.py",
+    ),
+    (
+        "fail closed: a code is not redeemed when the store is down",
+        "oauth/provider.py",
+        [
+            (
+                '            metrics.auth_refused("state_unavailable")\n            raise TokenError(',
+                "            first = True\n            if False:\n                raise TokenError(",
+            )
+        ],
+        "tests/unit/test_replicas.py",
+    ),
+    (
+        "readiness follows the key, not the store",
+        "app.py",
+        [("status_code=200 if key else 503", "status_code=200 if key and store_ok else 503")],
+        "tests/unit/test_replicas.py",
+    ),
+    (
+        "readiness refuses without a working key",
+        "app.py",
+        [("status_code=200 if key else 503", "status_code=200")],
+        "tests/unit/test_replicas.py",
+    ),
+    (
+        "an upload link takes one upload at a time",
+        "links/links.py",
+        [('if body is None or not await self._store.once("upload", body["u"], UPLOAD_TTL):', "if body is None:")],
+        "tests/unit/test_links.py",
+    ),
+    (
+        "logs: every record is one JSON object",
+        "observability.py",
+        [
+            (
+                "        return json.dumps(out, ensure_ascii=False, default=str)",
+                "        return f\"{out['level']} {out['msg']}\"",
+            )
+        ],
+        "tests/unit/test_logs_json.py",
+    ),
+    (
+        "logs: every record has its time",
+        "observability.py",
+        [('            "ts": ts,\n', "")],
+        "tests/unit/test_logs_json.py",
+    ),
+    (
+        "logs: key staging writes JSON",
+        "keys/stage.py",
+        [("    configure()\n", "")],
+        "tests/unit/test_logs_json.py",
+    ),
+    (
+        "logs: an uncaught exception is JSON",
+        "observability.py",
+        [("    sys.excepthook = _uncaught\n", "")],
+        "tests/unit/test_logs_json.py",
+    ),
+    (
+        "logs: a refused start is JSON",
+        "app.py",
+        [("    except ConfigError as e:\n", "    except ZeroDivisionError as e:\n")],
+        "tests/unit/test_logs_json.py",
+    ),
+    (
+        "logs: an exception's message is withheld",
+        "observability.py",
+        [
+            (
+                '            out["exc"] = bare_traceback(record.exc_info)',
+                '            out["exc"] = self.formatException(record.exc_info)',
+            )
+        ],
+        "tests/unit/test_logs_json.py",
     ),
 ]
 

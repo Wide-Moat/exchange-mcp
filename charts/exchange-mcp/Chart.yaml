@@ -3,8 +3,8 @@ name: exchange-mcp
 description: MCP server for on-premises Exchange (EWS) - mail, calendar, contacts and tasks for an AI assistant
 type: application
 # The release workflow refuses a tag that differs from version and appVersion.
-version: 0.1.7
-appVersion: "0.1.7"
+version: 0.2.0
+appVersion: "0.2.0"
 home: https://github.com/wide-moat/exchange-mcp
 sources:
   - https://github.com/wide-moat/exchange-mcp

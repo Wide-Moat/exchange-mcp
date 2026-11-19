@@ -11,6 +11,7 @@ from urllib.parse import quote
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
+from exchange_mcp import metrics
 from exchange_mcp.auth.credential import Credential, person_key
 from exchange_mcp.core.context import runtime
 from exchange_mcp.core.errors import ExchangeError
@@ -18,9 +19,13 @@ from exchange_mcp.core.html import prepare_outgoing
 from exchange_mcp.ews import mail as em
 from exchange_mcp.ews.client import Ews
 from exchange_mcp.links.links import MAX_ATTACHMENT_BYTES, MAX_BODY_BYTES, safe_name
+from exchange_mcp.state.store import StoreFull, StoreUnavailable
 
 log = logging.getLogger("exchange_mcp.links")
 _UPLOADS = asyncio.Semaphore(3)  # at most this many uploads held in memory at once, across all people
+# A download is held whole (EWS returns it base64 inside SOAP): at most this many at once, so 25 MB each
+# stays far below the container's memory limit.
+_DOWNLOADS = asyncio.Semaphore(4)
 UPLOAD_SECONDS = 120
 
 
@@ -41,6 +46,12 @@ def _cred(link: dict) -> Credential | None:
 
 
 async def download(request: Request) -> Response:
+    response = await _download(request)
+    metrics.link("download", _result(response))
+    return response
+
+
+async def _download(request: Request) -> Response:
     rt = runtime()
     link = await rt.links.opened_download(request.path_params["lid"])
     cred = _cred(link) if link else None
@@ -48,8 +59,11 @@ async def download(request: Request) -> Response:
         return _deny()
     if isinstance(link.get("s"), int) and link["s"] > MAX_ATTACHMENT_BYTES:
         return JSONResponse({"error": "The attachment is larger than this connector passes through."}, 413)
+    if _DOWNLOADS.locked():
+        return JSONResponse({"error": "The server is sending other files. Try again in a minute."}, 503)
     try:
-        name, ctype, data = await em.attachment_bytes(_ews(cred), link["a"])
+        async with _DOWNLOADS:
+            name, ctype, data = await em.attachment_bytes(_ews(cred), link["a"])
     except ExchangeError as e:
         log.info("download refused: %s", e.key)
         return JSONResponse({"error": "Exchange did not return the attachment. Ask for a new link."}, 502)
@@ -68,9 +82,27 @@ async def download(request: Request) -> Response:
     )
 
 
+def _result(response: Response) -> str:
+    return {200: "ok", 403: "denied", 413: "too_large", 503: "busy", 408: "timeout", 400: "invalid"}.get(
+        response.status_code, "upstream_error"
+    )
+
+
 async def upload(request: Request) -> Response:
+    response = await _upload(request)
+    metrics.link("upload", _result(response))
+    return response
+
+
+async def _upload(request: Request) -> Response:
     rt = runtime()
-    link = await rt.links.claim_upload(request.path_params["lid"])
+    try:
+        link = await rt.links.claim_upload(request.path_params["lid"])
+    except (StoreUnavailable, StoreFull):
+        log.info("upload refused: state store unavailable")
+        return JSONResponse(
+            {"error": "The server cannot take files right now. Nothing was saved; try again shortly."}, 503
+        )
     cred = _cred(link) if link else None
     if link is None or cred is None:
         return _deny()
@@ -95,7 +127,10 @@ async def upload(request: Request) -> Response:
                 return JSONResponse({"error": "The upload was empty."}, 400)
             return await _store(link, cred, bytes(data))
     finally:
-        rt.links.release_upload(link["u"])
+        try:
+            await rt.links.release_upload(link["u"])
+        except StoreUnavailable:
+            log.info("upload mark not released: state store unavailable")  # it expires with the link
 
 
 async def _store(link: dict, cred: Credential, data: bytes) -> Response:

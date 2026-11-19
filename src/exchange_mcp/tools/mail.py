@@ -634,7 +634,7 @@ async def send_draft(
         if not d.ours or not d.is_draft:
             raise ExchangeError("not_own_draft")
         count = len(d.to) + len(d.cc) + len(d.bcc)
-        receipt = c.guard(kind="mail", user_confirmed=user_confirmed, recipients=count)
+        receipt = await c.guard(kind="mail", user_confirmed=user_confirmed, recipients=count)
         await em.send(c.ews, d.id, d.change_key)
         return {"sent": True, "to": [r.get("address") for r in d.to], "cc": [r.get("address") for r in d.cc], **receipt}
 
@@ -683,7 +683,7 @@ async def save_automatic_reply(
             if ed <= datetime.now(UTC):  # Exchange refuses it without saying why (QA D15)
                 raise invalid("The end is already past: give a time to come. Nothing was changed.")
             s, e = ews_time(sd), ews_time(ed)
-        receipt = c.guard(kind="auto_reply", user_confirmed=user_confirmed)
+        receipt = await c.guard(kind="auto_reply", user_confirmed=user_confirmed)
         await em.set_oof(
             c.ews,
             c.me,

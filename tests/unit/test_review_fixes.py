@@ -7,42 +7,44 @@ import logging
 import os
 
 import pytest
-from conftest import base_env, envelope, ok
+from conftest import base_env, envelope, memory_store, ok
 
-from exchange_mcp.auth.limiter import MAX_KEYS, Limited, Limiter
+from exchange_mcp.auth.limiter import Limited, Limiter
 from exchange_mcp.config import ConfigError, Settings
 from exchange_mcp.core.errors import ExchangeError
-from exchange_mcp.core.guard import MAX_PEOPLE_TRACKED, Guard
+from exchange_mcp.core.guard import Guard
 from exchange_mcp.core.time import parse
 from exchange_mcp.keys.providers import read_key_file
 from exchange_mcp.keys.seal import LocalSealer
 from exchange_mcp.observability import ContentFilter, JsonFormatter
+from exchange_mcp.state.store import BUCKET_MAX, WINDOW_MAX
 
 
 # ---------------------------------------------------------------- memory stays bounded
-def test_the_limiter_refuses_rather_than_grows(monkeypatch):
-    import exchange_mcp.auth.limiter as lm
+async def test_the_limiter_refuses_rather_than_grows(monkeypatch):
+    import exchange_mcp.state.store as st
 
-    monkeypatch.setattr(lm, "MAX_KEYS", 4)
-    lim = Limiter(5, 20, clock=lambda: 0.0)
-    lim.take(login="a", network="n1")
-    lim.take(login="b", network="n2")
+    monkeypatch.setattr(st, "WINDOW_MAX", 4)
+    store = memory_store(LocalSealer([("k1", os.urandom(32))]), clock=lambda: 0.0)
+    lim = Limiter(store, 5, 20)
+    await lim.take(login="a", network="n1")
+    await lim.take(login="b", network="n2")
     with pytest.raises(Limited):
-        lim.take(login="c", network="n3")
-    assert len(lim._seen) == 4  # noqa: SLF001
-    assert MAX_KEYS > 1000
+        await lim.take(login="c", network="n3")
+    assert len(store._windows) == 4  # noqa: SLF001
+    assert WINDOW_MAX > 1000
 
 
-def test_the_guard_refuses_rather_than_grows(monkeypatch):
-    import exchange_mcp.core.guard as gm
+async def test_the_guard_refuses_rather_than_grows(monkeypatch):
+    import exchange_mcp.state.store as st
 
-    monkeypatch.setattr(gm, "MAX_PEOPLE_TRACKED", 2)
-    g = Guard(clock=lambda: 0.0)
-    g.check("p1", kind="mail", user_confirmed=True)
-    g.check("p2", kind="mail", user_confirmed=True)
+    monkeypatch.setattr(st, "BUCKET_MAX", 2)
+    g = Guard(memory_store(LocalSealer([("k1", os.urandom(32))]), clock=lambda: 0.0))
+    await g.check("p1", kind="mail", user_confirmed=True)
+    await g.check("p2", kind="mail", user_confirmed=True)
     with pytest.raises(ExchangeError) as e:
-        g.check("p3", kind="mail", user_confirmed=True)
-    assert e.value.key == "busy" and MAX_PEOPLE_TRACKED > 1000
+        await g.check("p3", kind="mail", user_confirmed=True)
+    assert e.value.key == "busy" and BUCKET_MAX > 1000
 
 
 # ---------------------------------------------------------------- logs
@@ -130,17 +132,20 @@ async def test_a_live_code_is_never_forgotten(monkeypatch):
     from mcp.server.auth.provider import TokenError
     from test_oauth import client, code_for, make
 
-    import exchange_mcp.oauth.provider as op
+    import exchange_mcp.state.store as st
 
-    monkeypatch.setattr(op, "USED_CODES_MAX", 1)
+    monkeypatch.setattr(st, "ONCE_MAX", 1)
     p, _ = make()
     c = await client(p)
     first = await code_for(p, c)
     await p.exchange_authorization_code(c, await p.load_authorization_code(c, first))
     second = await code_for(p, c)
-    with pytest.raises(TokenError):
+    with pytest.raises(TokenError) as e:
         await p.exchange_authorization_code(c, await p.load_authorization_code(c, second))
-    assert await p.load_authorization_code(c, first) is None  # still remembered as used
+    assert e.value.error == "invalid_request"  # full: refused, not forgotten
+    with pytest.raises(TokenError) as e:  # the first is still remembered as used
+        await p.exchange_authorization_code(c, await p.load_authorization_code(c, first))
+    assert e.value.error == "invalid_grant"
 
 
 async def test_an_expired_adfs_credential_gets_no_token():

@@ -1,0 +1,114 @@
+# Valkey behind Sentinel for the chart's end-to-end run: one master, one replica, three sentinels, no
+# password anywhere (the shape a platform's store usually has). The official valkey/valkey image only.
+# __NS__ is replaced with the namespace by scripts/chart-e2e.sh.
+#
+# The sentinels watch and hand out pod IPs. Hostname mode (resolve-hostnames, announce-hostnames) was
+# tried first and measured broken here: the sentinels resolve names synchronously, entered TILT mode
+# every ten seconds in kind, and in TILT a sentinel never fails over. Pods do not restart during a run,
+# so their IPs hold. DEBUG is enabled so the run can freeze the master (DEBUG SLEEP) and watch a failover.
+apiVersion: v1
+kind: Service
+metadata:
+  name: valkey
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector:
+    app: valkey
+  ports:
+    - name: valkey
+      port: 6379
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: valkey
+spec:
+  serviceName: valkey
+  replicas: 2
+  selector:
+    matchLabels:
+      app: valkey
+  template:
+    metadata:
+      labels:
+        app: valkey
+    spec:
+      containers:
+        - name: valkey
+          image: valkey/valkey:8.1.12-alpine@sha256:9971099af41c36e887aabdfe22b80c0fe45df949163dfc9cb434febc57cfc3fc
+          command:
+            - sh
+            - -c
+            - |
+              set -- --port 6379 --save "" --appendonly no --enable-debug-command yes \
+                --maxmemory-policy noeviction
+              if [ "$(hostname)" != valkey-0 ]; then
+                set -- "$@" --replicaof valkey-0.valkey.__NS__.svc.cluster.local 6379
+              fi
+              exec valkey-server "$@"
+          ports:
+            - containerPort: 6379
+          readinessProbe:
+            exec:
+              command: ["valkey-cli", "ping"]
+            periodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: valkey-sentinel
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector:
+    app: valkey-sentinel
+  ports:
+    - name: sentinel
+      port: 26379
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: valkey-sentinel
+spec:
+  serviceName: valkey-sentinel
+  replicas: 3
+  podManagementPolicy: Parallel
+  selector:
+    matchLabels:
+      app: valkey-sentinel
+  template:
+    metadata:
+      labels:
+        app: valkey-sentinel
+    spec:
+      containers:
+        - name: sentinel
+          image: valkey/valkey:8.1.12-alpine@sha256:9971099af41c36e887aabdfe22b80c0fe45df949163dfc9cb434febc57cfc3fc
+          command:
+            - sh
+            - -c
+            - |
+              until master=$(getent hosts valkey-0.valkey.__NS__.svc.cluster.local | awk '{print $1}') \
+                && [ -n "$master" ]; do sleep 1; done
+              cat > /data/sentinel.conf <<EOF
+              port 26379
+              sentinel monitor mymaster $master 6379 2
+              sentinel down-after-milliseconds mymaster 5000
+              sentinel failover-timeout mymaster 15000
+              sentinel parallel-syncs mymaster 1
+              EOF
+              exec valkey-sentinel /data/sentinel.conf
+          ports:
+            - containerPort: 26379
+          readinessProbe:
+            exec:
+              command: ["valkey-cli", "-p", "26379", "sentinel", "get-master-addr-by-name", "mymaster"]
+            periodSeconds: 5
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          emptyDir: {}

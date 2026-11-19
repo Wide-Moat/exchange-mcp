@@ -45,21 +45,23 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ github.token }}
-      - name: build
+      # Two architectures, one manifest list: amd64 natively, arm64 through QEMU.
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: build each architecture, loaded locally for the scan
         shell: bash
         env:
           TAGS: ${{ steps.meta.outputs.tags }}
-          LABELS: ${{ steps.meta.outputs.labels }}
         run: |
           set -euo pipefail
-          tags=()
-          while IFS= read -r t; do if [ -n "$t" ]; then tags+=("$t"); fi; done <<< "$TAGS"
-          [ "${#tags[@]}" -gt 0 ] || { echo "metadata gave no tags: nothing would be pushed"; exit 1; }
-          args=(-t exchange-mcp:candidate)
-          for t in "${tags[@]}"; do args+=(-t "$t"); done
-          while IFS= read -r l; do if [ -n "$l" ]; then args+=(--label "$l"); fi; done <<< "$LABELS"
-          echo "building ${#tags[@]} tags: ${tags[*]}"
-          docker build "${args[@]}" .
+          if [ -z "$(tr -d '[:space:]' <<< "$TAGS")" ]; then
+            echo "metadata gave no tags: nothing would be pushed"; exit 1
+          fi
+          for arch in amd64 arm64; do
+            docker buildx build --platform "linux/${arch}" --load -t "exchange-mcp:candidate-${arch}" .
+            got=$(docker image inspect -f '{{.Architecture}}' "exchange-mcp:candidate-${arch}")
+            [ "$got" = "$arch" ] || { echo "built ${got}, not ${arch}"; exit 1; }
+          done
       - name: install the pinned trivy
         shell: bash
         env:
@@ -73,41 +75,53 @@ jobs:
           echo "${TRIVY_SHA256}  /tmp/trivy.tar.gz" | sha256sum -c -
           tar -xzf /tmp/trivy.tar.gz -C /tmp trivy && chmod +x /tmp/trivy
       # Before anything is pushed: a failed scan leaves no tag in the registry.
-      - name: no HIGH or CRITICAL vulnerability with a fix in the image
+      - name: no HIGH or CRITICAL vulnerability with a fix in either image
         shell: bash
         run: |
           set -uo pipefail
-          /tmp/trivy image --no-progress --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed \
-            --list-all-pkgs --format json -o /tmp/scan.json exchange-mcp:candidate
-          python3 - <<'PY'
+          status=0
+          for arch in amd64 arm64; do
+            /tmp/trivy image --no-progress --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed \
+              --list-all-pkgs --format json -o "/tmp/scan-${arch}.json" "exchange-mcp:candidate-${arch}"
+            python3 - "/tmp/scan-${arch}.json" "$arch" <<'PY' || status=1
           import json, sys
-          d = json.load(open("/tmp/scan.json"))
+          d = json.load(open(sys.argv[1]))
           results = d.get("Results") or []
           packages = sum(len(r.get("Packages") or []) for r in results)
           vulns = [v for r in results for v in (r.get("Vulnerabilities") or [])]
-          print(f"{len(results)} targets, {packages} packages scanned, {len(vulns)} fixable HIGH/CRITICAL")
+          print(f"{sys.argv[2]}: {len(results)} targets, {packages} packages, {len(vulns)} fixable HIGH/CRITICAL")
           if not packages:
               print("trivy found no packages: the image was not scanned"); sys.exit(2)
           for v in vulns:
               print(v["VulnerabilityID"], v.get("PkgName"), v.get("InstalledVersion"), "->", v.get("FixedVersion"))
           sys.exit(1 if vulns else 0)
           PY
+          done
+          exit "$status"
+      # The same build again for both platforms, from the builder's cache: the layers just scanned.
       - id: push
-        name: push the scanned image
+        name: push the scanned images as one manifest list
         shell: bash
         env:
           TAGS: ${{ steps.meta.outputs.tags }}
+          LABELS: ${{ steps.meta.outputs.labels }}
         run: |
           set -euo pipefail
+          args=()
           first=""
           while IFS= read -r t; do
             [ -n "$t" ] || continue
-            docker push "$t"
+            args+=(-t "$t")
             first="${first:-$t}"
           done <<< "$TAGS"
-          digest=$(docker inspect --format '{{index .RepoDigests 0}}' "$first" | cut -d@ -f2)
+          while IFS= read -r l; do if [ -n "$l" ]; then args+=(--label "$l"); fi; done <<< "$LABELS"
+          docker buildx build --platform linux/amd64,linux/arm64 --push "${args[@]}" .
+          digest=$(docker buildx imagetools inspect "$first" --format '{{json .Manifest}}' | jq -r .digest)
           case "$digest" in sha256:*) ;; *) echo "no digest after push: ${digest}"; exit 1;; esac
-          echo "pushed $(wc -l <<< "$TAGS") tags, digest ${digest}"
+          platforms=$(docker buildx imagetools inspect "$first" --format '{{json .Manifest}}' \
+            | jq -r '[.manifests[].platform | select(.architecture != "unknown") | .architecture] | sort | join(",")')
+          [ "$platforms" = "amd64,arm64" ] || { echo "the manifest list holds ${platforms}"; exit 1; }
+          echo "pushed $(wc -l <<< "$TAGS") tags for ${platforms}, digest ${digest}"
           echo "what an installation should pin: ghcr.io/wide-moat/exchange-mcp@${digest}"
           echo "digest=${digest}" >> "$GITHUB_OUTPUT"
 
