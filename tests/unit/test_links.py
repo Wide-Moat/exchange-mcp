@@ -142,3 +142,29 @@ async def test_a_download_slot_is_held_until_the_answer_is_sent(ews, cred):
     with pytest.raises(OSError):
         await held({"type": "http"}, None, gone)
     assert routes._DOWNLOADS._value == free  # noqa: SLF001
+
+
+async def test_a_content_type_no_header_can_carry_is_sent_as_a_plain_download(ews, cred):
+    """Exchange's ContentType is someone else's text. One a header cannot encode must not fail the answer
+    (and so never leak the download slot): it goes out as application/octet-stream."""
+    import base64
+
+    from exchange_mcp.auth.credential import person_key
+    from exchange_mcp.core import context
+    from exchange_mcp.links import routes
+
+    sealer = LocalSealer([("k1", os.urandom(32))])
+    client = app_for(ews, sealer)
+    free = routes._DOWNLOADS._value  # noqa: SLF001
+    ews.on(
+        "GetAttachment",
+        ok(
+            "GetAttachment",
+            "<m:Attachments><t:FileAttachment><t:Name>r.pdf</t:Name><t:ContentType>application/文件"
+            f"</t:ContentType><t:Content>{base64.b64encode(b'%PDF-1').decode()}</t:Content></t:FileAttachment></m:Attachments>",
+        ),
+    )
+    link = await context.runtime().links.download(cred, person_key(cred.login), "A1", "r.pdf", 6)
+    r = await client.get(link["url"].replace(PUBLIC, ""))
+    assert r.status_code == 200 and r.headers["content-type"] == "application/octet-stream"
+    assert routes._DOWNLOADS._value == free  # noqa: SLF001

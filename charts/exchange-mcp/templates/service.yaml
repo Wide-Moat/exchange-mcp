@@ -16,7 +16,7 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ include "exchange-mcp.fullname" . }}-metrics
+  name: {{ include "exchange-mcp.fullname" . | trunc 55 | trimSuffix "-" }}-metrics
   labels:
     {{- include "exchange-mcp.labels" . | nindent 4 }}
     app.kubernetes.io/component: metrics

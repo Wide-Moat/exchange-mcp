@@ -16,7 +16,9 @@ trivy=${TRIVY:-trivy}
 command -v skopeo >/dev/null || { echo "skopeo is required" >&2; exit 2; }
 mkdir -p "$out"
 
-docker buildx build --platform linux/amd64,linux/arm64 "$@" --output "type=oci,dest=$out/image.tar" .
+# both architectures, the foreign one under QEMU: a stalled registry or mirror fails the build in time
+timeout "${BUILD_SECONDS:-1500}" \
+  docker buildx build --platform linux/amd64,linux/arm64 "$@" --output "type=oci,dest=$out/image.tar" .
 digest=$(skopeo inspect --raw "oci-archive:$out/image.tar" | sha256sum | cut -d' ' -f1)
 echo "built the manifest list sha256:${digest}"
 

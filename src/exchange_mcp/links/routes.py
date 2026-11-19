@@ -71,20 +71,28 @@ async def _download(request: Request) -> Response:
     except BaseException:
         _DOWNLOADS.release()
         raise
-    if len(data) > MAX_ATTACHMENT_BYTES:
+    try:
+        if len(data) > MAX_ATTACHMENT_BYTES:
+            _DOWNLOADS.release()
+            return JSONResponse({"error": "The attachment is too large to pass through."}, 413)
+        safe = safe_name(link.get("n") or name)
+        ascii_name = "".join(ch if 32 <= ord(ch) < 127 and ch not in '"\\' else "_" for ch in safe)
+        # The content type is Exchange's text: anything a header cannot carry becomes a plain download.
+        if "/" not in ctype or not ctype.isascii() or not ctype.isprintable():
+            ctype = "application/octet-stream"
+        disposition = f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(safe, safe='')}"
+        return _Held(
+            data,
+            media_type=ctype,
+            headers={
+                "Content-Disposition": disposition,
+                "Cache-Control": "no-store",
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
+    except BaseException:  # the answer could not be built: _Held never runs, so the slot is freed here
         _DOWNLOADS.release()
-        return JSONResponse({"error": "The attachment is too large to pass through."}, 413)
-    safe = safe_name(link.get("n") or name)
-    ascii_name = "".join(ch if 32 <= ord(ch) < 127 and ch not in '"\\' else "_" for ch in safe)
-    return _Held(
-        data,
-        media_type=ctype if "/" in ctype else "application/octet-stream",
-        headers={
-            "Content-Disposition": f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(safe, safe='')}",
-            "Cache-Control": "no-store",
-            "X-Content-Type-Options": "nosniff",
-        },
-    )
+        raise
 
 
 class _Held(Response):

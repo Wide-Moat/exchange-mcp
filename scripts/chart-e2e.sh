@@ -19,7 +19,9 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 image=${IMAGE:?IMAGE=<repository:tag> already loaded into the cluster}
 known_bad=${KNOWN_BAD:-}
-ns=exchange-mcp-e2e
+# A namespace of this run's own, removed when it ends: a store promoted by an earlier run, or a stand-in
+# Exchange still serving an earlier certificate, cannot leak into it, and no other run's is touched.
+ns="exchange-mcp-e2e-$(openssl rand -hex 3)"
 rel=e2e
 secret=exchange-mcp-key
 host=mcp.example.com
@@ -28,13 +30,19 @@ replicas=3
 passed=0
 expected_failures=0
 pass() { echo "PASS $*"; passed=$((passed + 1)); }
-fail() { echo "FAIL $*"; exit 1; }
+fail() {
+  echo "FAIL $*"
+  k -n "$ns" get pods -o wide 2>/dev/null || true
+  k -n "$ns" logs -l app.kubernetes.io/instance=e2e --all-containers --tail=40 --prefix 2>/dev/null || true
+  exit 1
+}
 k() { kubectl --request-timeout=30s "$@"; }
 work=$(mktemp -d)
 pids=()
 cleanup() {
   for p in "${pids[@]}"; do kill "$p" 2>/dev/null || true; done
   rm -rf "$work"
+  if [ -z "${KEEP:-}" ]; then k delete namespace "$ns" --wait=false >/dev/null 2>&1 || true; fi
 }
 trap cleanup EXIT
 
@@ -57,10 +65,8 @@ replica_check() {
 }
 
 # ---------------------------------------------------------------- the cluster around the server
-# A namespace of this run's own: a store promoted by an earlier run, or a stand-in Exchange still serving
-# an earlier certificate, would make this run test the leftovers.
-k delete namespace "$ns" --ignore-not-found --wait=true --timeout=180s >/dev/null
-kubectl create namespace "$ns" --dry-run=client -o yaml | k apply -f - >/dev/null
+k create namespace "$ns" >/dev/null
+echo "namespace $ns"
 sed "s/__NS__/$ns/g" tests/e2e/valkey-sentinel.yaml | k -n "$ns" apply -f - >/dev/null
 sentinels="valkey-sentinel-0.valkey-sentinel.$ns.svc.cluster.local:26379"
 sentinels="$sentinels,valkey-sentinel-1.valkey-sentinel.$ns.svc.cluster.local:26379"
@@ -170,11 +176,15 @@ forward_pods() {
     i=$((i + 1))
   done
   for i in $(seq 0 $((replicas - 1))); do
-    for _ in $(seq 1 31); do
-      [ "$(curl -s --max-time 5 -o /dev/null -w '%{http_code}' -H "Host: $host" "http://127.0.0.1:$((18800 + i))/healthz")" = 200 ] && break
-      [ "$_" = 31 ] && fail "pod ${pods[$i]} does not answer through its port-forward"
+    local attempt answered=""
+    for attempt in $(seq 1 30); do
+      if [ "$(curl -s --max-time 5 -o /dev/null -w '%{http_code}' -H "Host: $host" "http://127.0.0.1:$((18800 + i))/healthz")" = 200 ]; then
+        answered=$attempt
+        break
+      fi
       sleep 1
     done
+    [ -n "$answered" ] || fail "pod ${pods[$i]} does not answer through its port-forward"
   done
   # the stand-in Exchange signs alex in on these pods: the replica checks below depend on it
   python3 tests/e2e/flow.py code "$(main_port 0)" alex "$password" >/dev/null || fail "the baseline sign-in on ${pods[0]} failed"

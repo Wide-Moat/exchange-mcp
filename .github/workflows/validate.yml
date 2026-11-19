@@ -343,7 +343,8 @@ jobs:
           python3 scripts/chart_rendered.py rendered.yaml
           python3 scripts/chart_rendered.py scaled.yaml
           python3 scripts/chart_rendered.py one.yaml
-          grep -q 'type: Recreate' one.yaml && grep -q 'type: RollingUpdate' rendered.yaml
+          grep -q 'type: Recreate' one.yaml || { echo "one replica without a store is not Recreate"; exit 1; }
+          grep -q 'type: RollingUpdate' rendered.yaml || { echo "replicas with a store do not roll"; exit 1; }
           helm template t charts/exchange-mcp "${ok[@]}" --set service.type=LoadBalancer > lb.yaml
           python3 scripts/chart_rendered.py lb.yaml
           # the Ingress routes named paths only, never /
@@ -401,10 +402,7 @@ jobs:
         run: IMAGE=exchange-mcp:e2e scripts/chart-e2e.sh
       - name: what the cluster saw
         if: failure()
-        run: |
-          kubectl -n exchange-mcp-e2e get pods -o wide || true
-          kubectl -n exchange-mcp-e2e describe pods | tail -60 || true
-          kubectl -n exchange-mcp-e2e logs -l app.kubernetes.io/instance=e2e --all-containers --tail=80 || true
+        run: kubectl --request-timeout=30s get pods -A -o wide || true
 
   # The replica checks of scripts/chart-e2e.sh against 0.1.7, the last image that kept its state in each
   # process: every one of them must fail there. A check that passes against it proves nothing.
@@ -429,9 +427,7 @@ jobs:
         run: IMAGE=exchange-mcp:known-bad KNOWN_BAD=1 scripts/chart-e2e.sh
       - name: what the cluster saw
         if: failure()
-        run: |
-          kubectl -n exchange-mcp-e2e get pods -o wide || true
-          kubectl -n exchange-mcp-e2e logs -l app.kubernetes.io/instance=e2e --all-containers --tail=40 || true
+        run: kubectl --request-timeout=30s get pods -A -o wide || true
 
   probe:
     # The built image starts as a non-root user, refuses a key in the environment, and serves OAuth
