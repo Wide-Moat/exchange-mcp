@@ -104,7 +104,9 @@ with ingress-nginx set, through `ingress.annotations` (the chart sets none):
 
 Set `trustedProxies` to the ingress controllers' addresses or CIDRs: the server then reads the client from
 `X-Forwarded-For` and limits sign-in attempts per client network too. Unset, that limit is off, because
-behind a proxy everybody would share one network and a few failures would lock everyone out.
+behind a proxy everybody would share one network and a few failures would lock everyone out. A
+server that people reach directly, with no proxy in front, sets `trustedProxies` to an address no
+client uses (for example `192.0.2.1`): the per-network limit then counts each connection's own address.
 
 ## Values
 

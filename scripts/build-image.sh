@@ -15,6 +15,8 @@ shift
 trivy=${TRIVY:-trivy}
 command -v skopeo >/dev/null || { echo "skopeo is required" >&2; exit 2; }
 mkdir -p "$out"
+layouts=$(mktemp -d)  # per-architecture layouts, this run's own
+trap 'rm -rf "$layouts"' EXIT
 
 # both architectures, the foreign one under QEMU: a stalled registry or mirror fails the build in time
 timeout "${BUILD_SECONDS:-1500}" \
@@ -24,13 +26,13 @@ echo "built the manifest list sha256:${digest}"
 
 status=0
 for arch in amd64 arm64; do
-  rm -f "$out/$arch.tar"
-  skopeo copy --quiet --override-arch "$arch" "oci-archive:$out/image.tar" "oci-archive:$out/$arch.tar"
-  got=$(skopeo inspect --config "oci-archive:$out/$arch.tar" | jq -r .architecture)
+  # one architecture, as an OCI layout directory: what trivy --input reads
+  skopeo copy --quiet --override-arch "$arch" "oci-archive:$out/image.tar" "oci:$layouts/$arch:image"
+  got=$(skopeo inspect --config "oci:$layouts/$arch:image" | jq -r .architecture)
   [ "$got" = "$arch" ] || { echo "the $arch image is $got" >&2; exit 1; }
 
   "$trivy" image --no-progress --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed --list-all-pkgs \
-    --format json -o "$out/scan-$arch.json" --input "$out/$arch.tar"
+    --format json -o "$out/scan-$arch.json" --input "$layouts/$arch"
   python3 - "$out/scan-$arch.json" "$arch" <<'PY' || status=1
 import json, sys
 d = json.load(open(sys.argv[1]))
@@ -45,7 +47,7 @@ for v in vulns:
 sys.exit(1 if vulns else 0)
 PY
 
-  skopeo copy --quiet "oci-archive:$out/$arch.tar" "docker-daemon:exchange-mcp:check-$arch"
+  skopeo copy --quiet "oci:$layouts/$arch:image" "docker-daemon:exchange-mcp:check-$arch"
   machine=$(docker run --rm --platform "linux/$arch" --entrypoint python "exchange-mcp:check-$arch" \
     -c 'import platform, exchange_mcp.app, redis, prometheus_client; print(platform.machine())')
   want=$([ "$arch" = amd64 ] && echo x86_64 || echo aarch64)

@@ -342,6 +342,13 @@ kid1=$(scripts/new-sealing-key.sh "$ns" "$secret")
 install "$kid1"
 
 if [ -n "$known_bad" ]; then
+  # The old image has no metrics port, so this chart's probes (on 9090) would restart its containers
+  # every 90 seconds and break the port-forwards mid-check. They are removed for this run only: what is
+  # measured is the old server's behaviour, not its probes.
+  k -n "$ns" patch deploy "$rel-exchange-mcp" --type json -p '[
+    {"op": "remove", "path": "/spec/template/spec/containers/0/livenessProbe"},
+    {"op": "remove", "path": "/spec/template/spec/containers/0/readinessProbe"}]' >/dev/null
+  k -n "$ns" rollout status deploy/"$rel-exchange-mcp" --timeout=240s >/dev/null
   for _ in $(seq 1 90); do
     [ "$(server_pods | wc -l)" -ge "$replicas" ] && break
     sleep 2
