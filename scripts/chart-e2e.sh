@@ -170,8 +170,12 @@ forward_pods() {
   local i=0 p
   mapfile -t pods < <(server_pods | head -"$replicas")
   [ "${#pods[@]}" -eq "$replicas" ] || fail "${#pods[@]} running server pods, not $replicas"
+  # one port-forward per port: kubectl ends a whole port-forward when one forwarded connection fails, and
+  # an image without a metrics port (the known-bad run) must not take the main port's forward with it
   for p in "${pods[@]}"; do
-    timeout 900 kubectl -n "$ns" port-forward "pod/$p" "$((18800 + i)):8000" "$((18900 + i)):9090" >/dev/null 2>&1 &
+    timeout 900 kubectl -n "$ns" port-forward "pod/$p" "$((18800 + i)):8000" >/dev/null 2>&1 &
+    pids+=("$!")
+    timeout 900 kubectl -n "$ns" port-forward "pod/$p" "$((18900 + i)):9090" >/dev/null 2>&1 &
     pids+=("$!")
     i=$((i + 1))
   done
