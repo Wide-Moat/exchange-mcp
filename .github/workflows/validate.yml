@@ -365,6 +365,13 @@ jobs:
             grep -qF "$want" <<<"$out" || { echo "refused for another reason: $out"; exit 1; }
             echo "refused as expected: $want"
           }
+          # signature: a bare `off` in a values file is YAML false, and must still render as off
+          printf 'signature: off\n' > sig-off.yaml
+          helm template t charts/exchange-mcp "${ok[@]}" -f sig-off.yaml > sig.yaml
+          grep -A1 'name: EXCHANGE_MCP_SIGNATURE' sig.yaml | grep -q 'value: "off"' \
+            || { echo "a bare signature: off did not render as off"; exit 1; }
+          grep -A1 'name: EXCHANGE_MCP_SIGNATURE' rendered.yaml | grep -q 'value: "owa"' \
+            || { echo "the default signature is not owa"; exit 1; }
           refuses "publicUrl is required"
           refuses "key.existingSecret is required" "${ok[@]}" --set key.existingSecret=
           refuses "needs state.url or state.sentinel.hosts" "${ok[@]}" --set state.url=
@@ -374,6 +381,7 @@ jobs:
           refuses "two different stores" "${ok[@]}" --set 'state.sentinel.hosts={s:26379}'
           refuses "state.existingSecret is set but no store is" "${ok[@]}" --set state.url= --set replicaCount=1 \
             --set state.existingSecret=store
+          refuses "signature is owa or off" "${ok[@]}" --set signature=always
       - name: build the image for the cluster
         run: docker build -t exchange-mcp:e2e .
       - name: the image reports the chart's version

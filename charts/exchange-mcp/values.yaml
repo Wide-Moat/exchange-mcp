@@ -54,6 +54,9 @@ key:
     mount: transit
     tokenSecretKey: vault-token  # a key of key.existingSecret
 
+# owa: a draft gets the person's Outlook on the web signature, as OWA adds it; off: never.
+signature: owa  # write "off" quoted, or bare: a bare off reads as false and is taken as off
+
 areas: []  # empty: every area; or a subset of mail, calendar, people, contacts, tasks
 clientHosts: []  # empty: any https or loopback redirect URI may register
 

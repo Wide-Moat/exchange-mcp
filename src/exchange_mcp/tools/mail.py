@@ -9,6 +9,7 @@ from typing import Annotated, Any, Literal
 from pydantic import Field
 
 from exchange_mcp.core import resolve
+from exchange_mcp.core import signature as sigs
 from exchange_mcp.core.content import content_block, content_line, name
 from exchange_mcp.core.context import call
 from exchange_mcp.core.errors import ExchangeError, invalid
@@ -465,9 +466,7 @@ async def _addresses(c, people: list[str] | None) -> list[str]:
 
 @tool(area="mail", title="Save a draft")
 async def save_draft(
-    id: Annotated[
-        str | None, Field(description="A draft this connector saved, to change it; absent creates one.")
-    ] = None,
+    id: Annotated[str | None, Field(description="A draft this connector saved, to change; absent creates one.")] = None,
     mode: Annotated[
         Literal["new", "reply", "reply_all", "forward"],
         Field(description="new writes a new message; reply, reply_all and forward answer message."),
@@ -478,17 +477,18 @@ async def save_draft(
     bcc: list[str] | None = None,
     subject: str | None = None,
     body: Annotated[str | None, Field(description="Short text, or HTML when html is true.")] = None,
-    html: Annotated[bool, Field(description="body is HTML; it is cleaned and checked.")] = False,
+    html: Annotated[bool, Field(description="body is HTML.")] = False,
     body_upload: Annotated[
-        bool, Field(description="Return a link to upload a designed HTML letter from the sandbox instead of body.")
+        bool, Field(description="A link to upload a designed HTML letter from the sandbox, for body.")
     ] = False,
     attach: Annotated[list[str] | None, Field(description="File names in the sandbox to attach.")] = None,
     importance: Literal["low", "normal", "high"] | None = None,
+    signature: Annotated[bool, Field(description="false: no signature.")] = True,
 ) -> dict[str, Any]:
-    """Writes or changes a draft in the person's Drafts folder: a new message, a reply, a reply to all or a
-    forward. Call it whenever the person wants to send mail, then show them the preview; only send_draft
-    sends, after they agree. HTML is cleaned of anything active and checked for Outlook; the preview lists
-    what was changed and Exchange's warnings (external recipients, automatic replies, size)."""
+    """Writes or changes a draft in the person's Drafts folder: new, reply, reply to all or forward, with
+    their Outlook on the web signature. Call it when the person wants to send mail, then show them the
+    preview; only send_draft sends, after they agree. HTML is cleaned and checked for Outlook; the preview
+    lists changes and Exchange's warnings (external recipients, automatic replies)."""
     async with call("save_draft") as c:
         if len(attach or []) > MAX_ATTACHMENTS:
             raise ExchangeError("too_many", limit=MAX_ATTACHMENTS, what="attachments", count=len(attach or []))
@@ -520,21 +520,46 @@ async def save_draft(
         else:
             inline_images = []
         imp = (importance or "normal").capitalize()
+        setting = c.rt.settings.signature
+        attached: set[str] = set()  # inline images the draft already has (an edit keeps them)
 
         if id is None:
             if mode == "new":
                 if not to_l and not cc_l and not bcc_l:
                     raise invalid("A new message needs at least one recipient.")
-                did, ck = await em.create_draft(
-                    c.ews, subject=subject or "", html=html_body or "", to=to_l, cc=cc_l, bcc=bcc_l, importance=imp
-                )
             else:
                 if not message:
                     raise invalid(f"{mode} needs message: the id of the message to answer.")
                 if mode == "forward" and not to_l:
                     raise invalid("A forward needs at least one recipient in to.")
+            # Read once, before anything is written; it never fails the draft (core/signature.py).
+            sig = await sigs.for_draft(
+                c.ews, setting=setting, wanted=signature, kind="new" if mode == "new" else "reply", html_draft=html
+            )
+            # In a reply or forward this is NewBodyContent, which Exchange puts above the quoted original.
+            html_body, sig = sigs.settle(html_body or "", sig)
+            signed = sigs.marker(sig) is True
+            if mode == "new":
+                did, ck = await em.create_draft(
+                    c.ews,
+                    subject=subject or "",
+                    html=html_body,
+                    to=to_l,
+                    cc=cc_l,
+                    bcc=bcc_l,
+                    importance=imp,
+                    signed=signed,
+                )
+            else:
                 did, ck = await em.create_response(
-                    c.ews, mode=mode, reference=message, html=html_body or "", to=to_l, cc=cc_l, bcc=bcc_l
+                    c.ews,
+                    mode=mode,
+                    reference=message,
+                    html=html_body,
+                    to=to_l,
+                    cc=cc_l,
+                    bcc=bcc_l,
+                    signed=signed,
                 )
                 if subject or importance:
                     ck = await em.update_draft(
@@ -553,6 +578,17 @@ async def save_draft(
             if not current.ours or not current.is_draft:
                 raise ExchangeError("not_own_draft")
             did = id
+            attached = {a.name for a in current.attachments if a.inline}
+            signed: bool | None = None
+            if html_body is None:
+                sig = sigs.Signature(sigs.KEPT if current.signed else sigs.UNSIGNED)
+            elif not current.signed:
+                sig = sigs.Signature(sigs.UNSIGNED)  # added only on creation, or back after an edit removed it
+            else:
+                # The new body replaces the old one and the signature with it: put it back, once.
+                sig = await sigs.for_draft(c.ews, setting=setting, wanted=signature, kind="edit", html_draft=html)
+                html_body, sig = sigs.settle(html_body, sig)
+                signed = sigs.marker(sig)
             await em.update_draft(
                 c.ews,
                 did,
@@ -563,12 +599,13 @@ async def save_draft(
                 cc=cc_l if cc is not None else None,
                 bcc=bcc_l if bcc is not None else None,
                 importance=imp if importance else None,
+                signed=signed,
             )
-        for img in inline_images:
+        for img in sigs.to_attach(inline_images, sig, attached):
             await em.add_attachment(
                 c.ews,
                 did,
-                f"{img.content_id}.{img.content_type.split('/')[-1]}",
+                sigs.inline_name(img),
                 img.content_type,
                 img.data,
                 content_id=img.content_id,
@@ -602,6 +639,7 @@ async def save_draft(
             "attachments_truncated": attached > MAX_ATTACHMENTS,
             "attachments_total": attached if attached > MAX_ATTACHMENTS else None,
             "html": report or None,
+            "signature": sig.note,
             "external_recipients": external or None,
             "recipients_with_automatic_reply": tips.get("automatic_replies") or None,
             "max_message_size": limit,

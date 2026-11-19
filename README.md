@@ -65,6 +65,11 @@ reaches the server.
 Excluded by design: inbox rules, forwarding, delegates, permissions, other mailboxes,
 impersonation, export, hard delete.
 
+Drafts carry the person's Outlook on the web signature exactly when OWA would add it (new messages,
+replies and forwards, each by the person's own OWA setting), cleaned like any body. An installation turns
+it off with `signature: off` in the chart (`EXCHANGE_MCP_SIGNATURE=off`); one draft leaves it out with
+`signature=false`.
+
 ## Security review
 
 | Question | Answer |

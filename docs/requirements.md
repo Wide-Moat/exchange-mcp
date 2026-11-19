@@ -122,7 +122,15 @@ carries one short-lived upload command per file. The result previews the draft (
 resolved, subject, the first 500 chars of text) with `{sanitized, warnings, size}` from the HTML
 pipeline and the MailTips for its recipients (external, automatic reply on, over the size limit).
 The draft is written to the person's Drafts folder and marked as made by this server (an extended
-property). Upstream: `CreateItem MessageDisposition=SaveOnly`, `CreateItem` with
+property). The person's Outlook on the web signature is added as OWA adds it: a new message when
+`autoaddsignature` is on, a reply or forward when `autoaddsignatureonreply` is on, after the new text and
+above the quoted original; HTML drafts take `signaturehtml`, text drafts `signaturetext`, each falling back
+to the other; it passes the same HTML pipeline as a body. `signature=false` or `EXCHANGE_MCP_SIGNATURE=off`
+leaves it out. An edit that replaces the body puts it back once if the draft was saved with it (a second
+marker property), never when the new body already carries its text; an edit that keeps the body leaves it.
+No signature, no OWA options, or an Exchange error: the draft is saved without it. The preview's
+`signature` says in one line whether it was added and why not. Upstream: `GetUserConfiguration`
+(`OWA.UserOptions` on `root`, `Dictionary`), `CreateItem MessageDisposition=SaveOnly`, `CreateItem` with
 `ReplyToItem` / `ReplyAllToItem` / `ForwardItem`, `UpdateItem`, `CreateAttachment`, `GetMailTips`.
 
 ### `send_draft(id, user_confirmed)`

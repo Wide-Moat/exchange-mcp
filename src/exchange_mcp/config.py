@@ -20,6 +20,7 @@ FORBIDDEN_SUFFIXES = ("_KEY", "_KEYS", "_SECRET", "_SECRETS", "_TOKEN", "_PASSWO
 AuthMode = Literal["adfs", "password"]
 LoginFormat = Literal["upn", "down_level"]
 KeyProvider = Literal["vault", "file", "memory"]
+SignatureMode = Literal["owa", "off"]
 
 PASSWORD_REFRESH_MAX_HOURS = 24
 PASSWORD_REFRESH_DEFAULT_HOURS = 12
@@ -259,6 +260,8 @@ class Settings:
     # The proxies (an ingress controller) whose X-Forwarded-For names the client. Empty: the client's
     # network is unknown behind a proxy, so the per-network sign-in limit is off.
     trusted_proxies: tuple[str, ...] = ()
+    # owa: a draft gets the person's Outlook on the web signature as OWA would add it; off: never.
+    signature: SignatureMode = "owa"
 
     @classmethod
     def from_env(cls, env: dict[str, str] | None = None) -> Settings:
@@ -269,6 +272,7 @@ class Settings:
             return (e.get(PREFIX + name) or default).strip()
 
         mode = _choice(f"{PREFIX}AUTH_MODE", get("AUTH_MODE"), ("adfs", "password"))
+        signature = _choice(f"{PREFIX}SIGNATURE", get("SIGNATURE", "owa"), ("owa", "off"))
         provider = _choice(f"{PREFIX}KEY_PROVIDER", get("KEY_PROVIDER", "file"), ("vault", "file", "memory"))
 
         login_format = _choice(f"{PREFIX}LOGIN_FORMAT", get("LOGIN_FORMAT", "upn"), ("upn", "down_level"))
@@ -342,6 +346,7 @@ class Settings:
             metrics_port=metrics_port,
             state=_state(get),
             trusted_proxies=_networks(f"{PREFIX}TRUSTED_PROXIES", get("TRUSTED_PROXIES")),
+            signature=signature,  # type: ignore[arg-type]
         )
 
 

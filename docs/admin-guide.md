@@ -31,6 +31,7 @@ Exchange and AD FS need nothing beyond the steps above. The operator sets:
 | `EXCHANGE_MCP_LOGIN_DOMAIN` | the UPN suffix (`upn`) or the NetBIOS domain (`down_level`) |
 | `EXCHANGE_MCP_LOGIN_ALSO` | the organisation's other spelling, exactly: the UPN suffix in `down_level`, the NetBIOS name in `upn` (comma-separated) |
 | `EXCHANGE_MCP_ATTEMPTS_PER_LOGIN` | below the directory's lockout threshold. The count is shared by every replica through the state store (`EXCHANGE_MCP_STATE_URL` or `_STATE_SENTINELS`); without a store, run one replica |
+| `EXCHANGE_MCP_SIGNATURE` | `owa` (default): `save_draft` adds the person's Outlook on the web signature exactly when OWA would (`autoaddsignature` for new messages, `autoaddsignatureonreply` for replies and forwards), read from `OWA.UserOptions` with `GetUserConfiguration`; `off`: never. Any other value stops the server |
 | `EXCHANGE_MCP_TRUSTED_PROXIES` | the ingress controllers' addresses or CIDRs. Without it the per-network limit is off: behind a proxy every person would share one network and a few failures would lock everyone out |
 
 Read the risks in [auth-modes](auth-modes.md#the-risks-of-password-and-what-holds-each) with the security

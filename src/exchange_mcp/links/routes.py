@@ -13,6 +13,7 @@ from starlette.responses import JSONResponse, Response
 
 from exchange_mcp import metrics
 from exchange_mcp.auth.credential import Credential, person_key
+from exchange_mcp.core import signature as sigs
 from exchange_mcp.core.context import runtime
 from exchange_mcp.core.errors import ExchangeError
 from exchange_mcp.core.html import prepare_outgoing
@@ -182,27 +183,39 @@ async def _store(link: dict, cred: Credential, data: bytes) -> Response:
         prepared = prepare_outgoing(data)
         if prepared.errors:
             return JSONResponse({"error": "The HTML was not saved.", "problems": prepared.errors}, 400)
+        # The letter replaces the whole body, the signature saved with the draft included: put it back once,
+        # exactly as an edit through save_draft does (core/signature.py).
+        html, signed = prepared.html, None
+        sig = sigs.Signature(sigs.UNSIGNED)
+        if draft.signed:
+            sig = await sigs.for_draft(
+                ews, setting=runtime().settings.signature, wanted=True, kind="edit", html_draft=True
+            )
+            html, sig = sigs.settle(html, sig)
+            signed = sigs.marker(sig)
         await em.update_draft(
             ews,
             draft.id,
             draft.change_key,
             subject=None,
-            html=prepared.html,
+            html=html,
             to=None,
             cc=None,
             bcc=None,
             importance=None,
+            signed=signed,
         )
-        for img in prepared.inline_images:
+        attached = {a.name for a in draft.attachments if a.inline}
+        for img in sigs.to_attach(prepared.inline_images, sig, attached):
             await em.add_attachment(
                 ews,
                 draft.id,
-                f"{img.content_id}.{img.content_type.split('/')[-1]}",
+                sigs.inline_name(img),
                 img.content_type,
                 img.data,
                 content_id=img.content_id,
             )
-        return JSONResponse({"body": "saved", **prepared.report()})
+        return JSONResponse({"body": "saved", "signature": sig.note, **prepared.report()})
     except ExchangeError as e:
         log.info("upload refused: %s", e.key)
         return JSONResponse(

@@ -128,6 +128,7 @@ client uses (for example `192.0.2.1`): the per-network limit then counts each co
 | `key.secretKey` | `key` | key of that Secret holding the sealing key |
 | `key.revision` | `""` | set it to the key id when the key changes; a change restarts the pods |
 | `key.vault.addr`, `.keyName`, `.mount`, `.tokenSecretKey` | | Vault/OpenBao transit; the token is staged like the key |
+| `signature` | `owa` | `owa`: drafts get the person's Outlook on the web signature as OWA adds it (new messages, replies and forwards, each by the person's own OWA setting); `off`: never |
 | `areas` | all | subset of `mail`, `calendar`, `people`, `contacts`, `tasks` |
 | `clientHosts` | any | hosts allowed in registered redirect URIs |
 | `replicaCount` | `2` | more than 1 needs `state`; 1 runs without a store |

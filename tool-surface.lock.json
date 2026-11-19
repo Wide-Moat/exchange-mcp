@@ -174,7 +174,7 @@
         "title": "Save a draft"
       },
       "area": "mail",
-      "input_schema_sha256": "6422361fc5c433a1e33bfc916c71e7019824b2ec60e14596f8578868f1b1ca9f"
+      "input_schema_sha256": "7331b0a13002ca1b32b930dbed6d20a0004f2cfafb6be6bf80a9195d09cede69"
     },
     "save_event": {
       "annotations": {
