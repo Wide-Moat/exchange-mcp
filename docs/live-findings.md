@@ -33,6 +33,7 @@ answers in the measured shape. No host, address or person of the installation go
 |---|---|---|
 | `adfs` mode, end to end: redirect to AD FS, `private_key_jwt` accepted by the token endpoint, the Bearer token accepted by EWS, refresh | needs Exchange 2019 CU13+ or Subscription Edition and an AD FS configured for it; no such installation was available | tests/unit/test_adfs.py (7 tests, fake AD FS) |
 | `respond_to_event` | needs an invitation from another person | tests/unit/test_calendar.py::test_respond_sends_the_answer |
+| The OWA signature: `GetUserConfiguration` of `OWA.UserOptions` on `root`, the key names and their case, the HTML Exchange stores in `signaturehtml`, and that the signature lands above the quoted original in a reply | needs a mailbox with a signature set in OWA | tests/unit/test_signature.py (recorded answers shaped by the documentation); scripts/chart-e2e.sh against the stand-in Exchange |
 | Times in the header Exchange quotes into a reply or forward, in the person's zone | needs a sent reply | tests/unit/test_calendar.py::test_requests_carry_the_persons_time_zone |
 
 ## Verify on the first live run

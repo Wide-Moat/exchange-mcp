@@ -206,6 +206,14 @@ spec:
             - name: EXCHANGE_MCP_VAULT_TOKEN_FILE
               value: /run/exchange-mcp/{{ .Values.key.vault.tokenSecretKey }}
             {{- end }}
+            {{- /* YAML reads a bare off as false and on as true: both mean what the operator wrote */}}
+            {{- $signature := .Values.signature }}
+            {{- if kindIs "bool" $signature }}{{ $signature = ternary "owa" "off" $signature }}{{ end }}
+            {{- if not (has $signature (list "owa" "off")) }}
+            {{- fail "signature is owa or off" }}
+            {{- end }}
+            - name: EXCHANGE_MCP_SIGNATURE
+              value: {{ $signature | quote }}
             {{- with .Values.areas }}
             - name: EXCHANGE_MCP_AREAS
               value: {{ join "," . | quote }}

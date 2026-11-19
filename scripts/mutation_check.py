@@ -761,6 +761,88 @@ MUTATIONS = [
         ],
         "tests/unit/test_logs_json.py",
     ),
+    (
+        "a new message is signed only when OWA signs new messages",
+        "core/signature.py",
+        [('    if kind == "new" and not owa.on_new:\n', "    if False:\n")],
+        "tests/unit/test_signature.py",
+    ),
+    (
+        "a reply or forward is signed only when OWA signs replies",
+        "core/signature.py",
+        [('    if kind == "reply" and not owa.on_reply:\n', "    if False:\n")],
+        "tests/unit/test_signature.py",
+    ),
+    (
+        "signature=false leaves the signature out",
+        "core/signature.py",
+        [("    if not wanted:\n", "    if False:\n")],
+        "tests/unit/test_signature.py",
+    ),
+    (
+        "the server switch turns signatures off",
+        "core/signature.py",
+        [('    if setting != "owa":\n', "    if False:\n")],
+        "tests/unit/test_signature.py",
+    ),
+    (
+        "the signature passes the same sanitiser as a body",
+        "core/signature.py",
+        [("    prepared = prepare_outgoing(source)\n", '    prepared = type(prepare_outgoing(""))(html=source)\n')],
+        "tests/unit/test_signature.py",
+    ),
+    (
+        "a body that carries the signature is not signed again",
+        "core/signature.py",
+        [("    if sig.added and carries(body_html, sig.html):\n", "    if False:\n")],
+        "tests/unit/test_signature.py",
+    ),
+    (
+        "an edit signs again only a draft saved with a signature",
+        "tools/mail.py",
+        [("            elif not current.signed:\n", "            elif False:\n")],
+        "tests/unit/test_signature.py",
+    ),
+    (
+        "an edit that keeps the body leaves the signature alone",
+        "tools/mail.py",
+        [
+            (
+                "            if html_body is None:\n                sig = sigs.Signature(",
+                "            if False:\n                sig = sigs.Signature(",
+            )
+        ],
+        "tests/unit/test_signature.py",
+    ),
+    (
+        "the metrics server's start and stop lines are not written twice",
+        "app.py",
+        [("    task = asyncio.create_task(_side_serve(side))\n", "    task = asyncio.create_task(side.serve())\n")],
+        "tests/unit/test_startup.py",
+    ),
+    (
+        "the store is measured from the start, before any request",
+        "app.py",
+        [
+            (
+                "            await ping_store(store)  # before the first request",
+                "            pass  # before the first request",
+            )
+        ],
+        "tests/unit/test_startup.py",
+    ),
+    (
+        "an edit that puts the signature back does not attach its images again",
+        "core/signature.py",
+        [("    seen = set(attached)\n", "    seen = set()\n")],
+        "tests/unit/test_signature.py",
+    ),
+    (
+        "an image-only signature is recognised in a body that carries it",
+        "core/signature.py",
+        [("    return bool(images) and images <= set(_SRC.findall(body_html))\n", "    return False\n")],
+        "tests/unit/test_signature.py",
+    ),
 ]
 
 

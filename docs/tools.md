@@ -46,9 +46,9 @@ Turns the person's automatic reply (out of office) on, schedules it, or turns it
 
 ### `save_draft`: Save a draft
 
-writes · 589 tokens
+writes · 599 tokens
 
-Writes or changes a draft in the person's Drafts folder: a new message, a reply, a reply to all or a forward. Call it whenever the person wants to send mail, then show them the preview; only send_draft sends, after they agree. HTML is cleaned of anything active and checked for Outlook; the preview lists what was changed and Exchange's warnings (external recipients, automatic replies, size).
+Writes or changes a draft in the person's Drafts folder: new, reply, reply to all or forward, with their Outlook on the web signature. Call it when the person wants to send mail, then show them the preview; only send_draft sends, after they agree. HTML is cleaned and checked for Outlook; the preview lists changes and Exchange's warnings (external recipients, automatic replies).
 
 ### `save_mail_folder`: Create or change a mail folder
 

@@ -15,6 +15,7 @@ from exchange_mcp.ews.client import Ews
 from exchange_mcp.ews.common import (
     DRAFT_PROPERTY_NAME,
     DRAFT_PROPERTY_SET,
+    SIGNATURE_PROPERTY_NAME,
     Page,
     draft_marker,
     draft_marker_uri,
@@ -23,6 +24,8 @@ from exchange_mcp.ews.common import (
     mailbox,
     page_of,
     paged_view,
+    signature_marker,
+    signature_marker_uri,
 )
 from exchange_mcp.ews.soap import M, T, find, findall, flag, text
 
@@ -252,6 +255,7 @@ class Message:
     attachments: list[Attachment] = field(default_factory=list)
     sender_smtp: str = ""
     size: int = 0
+    signed: bool = False  # saved with the person's signature (SIGNATURE_PROPERTY_NAME is "1")
 
 
 def _recipients(el: etree._Element, path: str) -> list[dict[str, str]]:
@@ -273,14 +277,18 @@ def _message(el: etree._Element) -> Message:
                 kind="file" if etree.QName(a).localname == "FileAttachment" else "item",
             )
         )
-    # The marker is looked up by its own name: the message carries other extended properties beside it.
-    ours = any(
-        (uri := p.find("{*}ExtendedFieldURI")) is not None
-        and uri.get("PropertyName") == DRAFT_PROPERTY_NAME
-        and uri.get("PropertySetId", "").lower() == DRAFT_PROPERTY_SET
-        and text(p, "t:Value") == "1"
-        for p in findall(el, "t:ExtendedProperty")
-    )
+
+    # The markers are looked up by their own names: the message carries other extended properties beside them.
+    def marked(name: str) -> bool:
+        return any(
+            (uri := p.find("{*}ExtendedFieldURI")) is not None
+            and uri.get("PropertyName") == name
+            and uri.get("PropertySetId", "").lower() == DRAFT_PROPERTY_SET
+            and text(p, "t:Value") == "1"
+            for p in findall(el, "t:ExtendedProperty")
+        )
+
+    ours = marked(DRAFT_PROPERTY_NAME)
     conv = find(el, "t:ConversationId")
     return Message(
         id=iid.get("Id"),
@@ -303,6 +311,7 @@ def _message(el: etree._Element) -> Message:
         attachments=atts,
         sender_smtp=_from_smtp(el),
         size=int(text(el, "t:Size")) if text(el, "t:Size").isdigit() else 0,
+        signed=marked(SIGNATURE_PROPERTY_NAME),
     )
 
 
@@ -328,6 +337,7 @@ async def get_message(ews: Ews, item: str, *, body: bool = True) -> Message:
         uris.append("item:Body")
     shape = M.ItemShape(T.BaseShape("IdOnly"), T.BodyType("HTML"), _fields(*uris, smtp=True))
     shape[-1].append(draft_marker_uri())
+    shape[-1].append(signature_marker_uri())
     messages = await ews.call(M.GetItem(shape, M.ItemIds(T.ItemId(Id=item))))
     found = findall(messages[0], "m:Items/*")
     if not found:
@@ -441,8 +451,11 @@ async def create_draft(
     cc: list[str],
     bcc: list[str],
     importance: str,
+    signed: bool = False,
 ) -> tuple[str, str]:
     msg = T.Message(T.Subject(subject), T.Body(html, BodyType="HTML"), T.Importance(importance), draft_marker())
+    if signed:
+        msg.append(signature_marker(True))
     # Element order follows the EWS schema: Subject, Body, Importance, ExtendedProperty, ..., recipients.
     for tag, addrs in (("ToRecipients", to), ("CcRecipients", cc), ("BccRecipients", bcc)):
         if addrs:
@@ -457,7 +470,15 @@ async def create_draft(
 
 
 async def create_response(
-    ews: Ews, *, mode: str, reference: str, html: str, to: list[str], cc: list[str], bcc: list[str]
+    ews: Ews,
+    *,
+    mode: str,
+    reference: str,
+    html: str,
+    to: list[str],
+    cc: list[str],
+    bcc: list[str],
+    signed: bool = False,
 ) -> tuple[str, str]:
     """A reply, reply-all or forward created by Exchange, so the thread and quoted history stay (rule 33).
     The new text goes above the history; the marker is set right after."""
@@ -481,7 +502,7 @@ async def create_response(
 
         raise ExchangeError("uncertain", ref="reply-without-id")
     new_id, new_ck = ids[0].get("Id"), ids[0].get("ChangeKey", "")
-    new_ck = await mark_draft(ews, new_id, new_ck)
+    new_ck = await mark_draft(ews, new_id, new_ck, signed=signed)
     return new_id, new_ck
 
 
@@ -491,15 +512,13 @@ async def _ck(ews: Ews, item: str) -> str:
     return await change_key(ews, item)
 
 
-async def mark_draft(ews: Ews, item: str, ck: str) -> str:
+async def mark_draft(ews: Ews, item: str, ck: str, *, signed: bool = False) -> str:
+    updates = T.Updates(T.SetItemField(draft_marker_uri(), T.Message(draft_marker())))
+    if signed:
+        updates.append(T.SetItemField(signature_marker_uri(), T.Message(signature_marker(True))))
     messages = await ews.call(
         M.UpdateItem(
-            M.ItemChanges(
-                T.ItemChange(
-                    T.ItemId(Id=item, ChangeKey=ck),
-                    T.Updates(T.SetItemField(draft_marker_uri(), T.Message(draft_marker()))),
-                )
-            ),
+            M.ItemChanges(T.ItemChange(T.ItemId(Id=item, ChangeKey=ck), updates)),
             ConflictResolution="AutoResolve",
             MessageDisposition="SaveOnly",
         )
@@ -519,6 +538,7 @@ async def update_draft(
     cc: list[str] | None,
     bcc: list[str] | None,
     importance: str | None,
+    signed: bool | None = None,
 ) -> str:
     updates = []
     if subject is not None:
@@ -538,6 +558,8 @@ async def update_draft(
             updates.append(T.SetItemField(T.FieldURI(FieldURI=uri), T.Message(_mailboxes(tag, addrs))))
         else:
             updates.append(T.DeleteItemField(T.FieldURI(FieldURI=uri)))
+    if signed is not None:  # a new body says whether it carries the signature now
+        updates.append(T.SetItemField(signature_marker_uri(), T.Message(signature_marker(signed))))
     if not updates:
         return ck
     messages = await ews.call(

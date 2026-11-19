@@ -3,6 +3,8 @@
     python tests/e2e/flow.py code <port> <login> <password>     -> prints: <client_id> <verifier> <code>
     python tests/e2e/flow.py redeem <port> <client_id> <verifier> <code>   -> "200", or "<status> <error>"
     python tests/e2e/flow.py attempt <port> <login> <password>  -> prints the sign-in page's HTTP status
+    python tests/e2e/flow.py draft <port> <login> <password>    -> signs in, calls save_draft over MCP with
+                                                                   the access token, prints the result JSON
 
 Each step talks to 127.0.0.1:<port> (a port-forward to one pod) with the public host in the Host header,
 as a browser and an MCP client would through the ingress. `code` fails unless the sign-in succeeded.
@@ -86,6 +88,40 @@ def sign_in(port: int, login: str, password: str) -> tuple[int, dict, str, str]:
     return status, headers, cid, verifier
 
 
+def token(port: int, login: str, password: str) -> str:
+    status, headers, cid, verifier = sign_in(port, login, password)
+    if status != 302:
+        raise SystemExit(f"sign-in answered {status}, not a redirect with a code")
+    code = parse_qs(urlsplit(headers["location"]).query)["code"][0]
+    form = urlencode(
+        {
+            "grant_type": "authorization_code",
+            "code": code,
+            "redirect_uri": REDIRECT,
+            "client_id": cid,
+            "code_verifier": verifier,
+        }
+    ).encode()
+    status, _, text = call(port, "POST", "/token", form, {"Content-Type": "application/x-www-form-urlencoded"})
+    if status != 200:
+        raise SystemExit(f"the token endpoint answered {status}")
+    return json.loads(text)["access_token"]
+
+
+def mcp(port: int, access: str, method: str, params: dict, rid: int) -> dict:
+    body = json.dumps({"jsonrpc": "2.0", "id": rid, "method": method, "params": params}).encode()
+    headers = {
+        "Authorization": f"Bearer {access}",
+        "Content-Type": "application/json",
+        "Accept": "application/json, text/event-stream",
+        "MCP-Protocol-Version": "2025-06-18",
+    }
+    status, _, text = call(port, "POST", "/mcp", body, headers)
+    if status != 200:
+        raise SystemExit(f"{method} answered {status}")
+    return json.loads(text)
+
+
 def main(argv: list[str]) -> None:
     what, port = argv[0], int(argv[1])
     if what == "code":
@@ -94,6 +130,21 @@ def main(argv: list[str]) -> None:
             raise SystemExit(f"sign-in answered {status}, not a redirect with a code")
         code = parse_qs(urlsplit(headers["location"]).query)["code"][0]
         print(cid, verifier, code)
+    elif what == "draft":
+        access = token(port, argv[2], argv[3])
+        mcp(
+            port,
+            access,
+            "initialize",
+            {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "e2e", "version": "1"}},
+            1,
+        )
+        args = {"to": [argv[2] if "@" in argv[2] else f"{argv[2]}@corp.example"], "subject": "e2e", "body": "Hello"}
+        answer = mcp(port, access, "tools/call", {"name": "save_draft", "arguments": args}, 2)
+        result = answer.get("result") or {}
+        if result.get("isError"):
+            raise SystemExit("save_draft failed: " + json.dumps(result.get("content"))[:400])
+        print(json.dumps(result.get("structuredContent") or {}))
     elif what == "attempt":
         print(sign_in(port, argv[2], argv[3])[0])
     elif what == "redeem":

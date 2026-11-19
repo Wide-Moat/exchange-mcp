@@ -12,6 +12,7 @@ import contextlib
 import logging
 import os
 import ssl
+from contextvars import ContextVar
 from urllib.parse import urlsplit
 
 import httpx
@@ -37,6 +38,28 @@ from exchange_mcp.state.store import Namer, StateStore
 
 log = logging.getLogger("exchange_mcp")
 READY_STORE_SECONDS = 0.5  # how long /readyz waits for the store's answer; the chart's probe allows 3 s
+# The store is pinged at start and then this often, so `mcp_state_store_up` has a sample from the first
+# scrape on, and an alert sees a store that was never reachable, not only one that failed an operation.
+STORE_PING_SECONDS = 15.0
+STORE_PING_TIMEOUT = 2.0
+
+
+async def ping_store(store: StateStore) -> bool:
+    """One bounded PING; the gauge follows the answer (Measured sets it; a hang or a crash sets 0 here)."""
+    try:
+        return await asyncio.wait_for(store.ping(), STORE_PING_TIMEOUT)
+    except Exception as e:  # noqa: BLE001 - any failure of the store is the answer, not an error
+        if not isinstance(e, TimeoutError):
+            log.info("state store ping failed: %s", type(e).__name__, extra={"event": "store_ping_failed"})
+        metrics.STORE_UP.labels(metrics.SERVER).set(0)
+        return False
+
+
+async def watch_store(store: StateStore, every: float = STORE_PING_SECONDS, sleep=asyncio.sleep) -> None:
+    """Pings the store every `every` seconds until cancelled. The first ping is the lifespan's own."""
+    while True:
+        await sleep(every)
+        await ping_store(store)
 
 
 def http_client(settings: Settings, *, connections: int | None = None) -> httpx.AsyncClient:
@@ -140,9 +163,14 @@ def build(
     @contextlib.asynccontextmanager
     async def lifespan(a):  # the outbound connection pool closes with the app
         async with inner(a) as state:
+            await ping_store(store)  # before the first request: the gauge has a sample from the start
+            watcher = asyncio.create_task(watch_store(store))
             try:
                 yield state
             finally:
+                watcher.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await watcher
                 await http.aclose()
                 await store.close()
 
@@ -155,6 +183,30 @@ def build(
         app.add_middleware(ProxyHeadersMiddleware, trusted_hosts=list(settings.trusted_proxies))
     app.add_middleware(metrics.HttpMetrics)  # outermost: counts every answer, the error pages included
     return app, server, provider
+
+
+# True inside the metrics port's server task. Both servers log through uvicorn's one `uvicorn.error` logger,
+# so without this every start and stop line appeared twice with the same pid (0.2.0).
+_SIDE: ContextVar[bool] = ContextVar("side_server", default=False)
+
+
+class SideLines(logging.Filter):
+    """Drops the metrics server's own INFO lines (started, startup complete, running on, finished): the
+    public server writes the same ones. Its warnings and errors still pass."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return record.levelno >= logging.WARNING or not _SIDE.get()
+
+
+def quiet_side_lines() -> None:
+    target = logging.getLogger("uvicorn.error")
+    if not any(isinstance(f, SideLines) for f in target.filters):
+        target.addFilter(SideLines())
+
+
+async def _side_serve(server) -> None:
+    _SIDE.set(True)  # this task's context only; tasks it creates (the lifespan) inherit it
+    await server.serve()
 
 
 class _SideServer:
@@ -187,7 +239,8 @@ async def serve(app: Starlette, settings: Settings) -> None:
     public = uvicorn.Server(uvicorn.Config(app, host=host, port=settings.port, **common))
     side_app = metrics.metrics_app(context.runtime().health)
     side = _SideServer.make(uvicorn.Config(side_app, host=host, port=settings.metrics_port, **common))
-    task = asyncio.create_task(side.serve())
+    quiet_side_lines()
+    task = asyncio.create_task(_side_serve(side))
     try:
         await public.serve()
     finally:

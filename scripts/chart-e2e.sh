@@ -286,9 +286,10 @@ check_failover() {
   return 1
 }
 
-# 6. every line of every container of every server pod, the init container included, is JSON
+# 6. every line of every container of every server pod, the init container included, is JSON, and no
+# uvicorn line is written twice (0.2.0 wrote each start and stop line twice: two servers, one logger)
 check_logs_json() {
-  local p c total=0 n
+  local p c total=0 n dup
   for p in "${pods[@]}"; do
     for c in stage-keys server; do
       k -n "$ns" logs "$p" -c "$c" >"$work/log" 2>/dev/null || { why="no logs for $p/$c"; return 1; }
@@ -303,10 +304,23 @@ print(len(lines))' "$work/log" 2>/dev/null); then
         return 1
       fi
       [ "$n" -gt 0 ] || { why="$p/$c wrote nothing"; return 1; }
+      dup=$(python3 -c '
+import collections, json, sys
+seen = collections.Counter()
+for l in open(sys.argv[1]):
+    if l.strip():
+        r = json.loads(l)
+        if r["logger"].startswith("uvicorn"):
+            seen[(r["event"], r["msg"])] += 1
+print(" ".join(f"{e}x{n}" for (e, _), n in seen.items() if n > 1))' "$work/log") \
+        || { why="the duplicate check could not read $p/$c"; return 1; }
+      [ -z "$dup" ] || { why="$p/$c wrote a uvicorn line more than once: $dup"; return 1; }
+      [ "$c" != server ] || grep -q '"started_server_process"' "$work/log" \
+        || { why="$p/server has no uvicorn start line: the duplicate check saw nothing"; return 1; }
       total=$((total + n))
     done
   done
-  echo "  $total JSON lines from $((${#pods[@]} * 2)) containers"
+  echo "  $total JSON lines from $((${#pods[@]} * 2)) containers, no uvicorn line twice"
 }
 
 # 7. /metrics on port 9090 of every pod, with the shared names; none on the main port
@@ -389,8 +403,42 @@ got=$(server python - <scripts/proc-probe.py)
 [ "$got" = "READ DENIED DENIED" ] || fail "own environ, PID 1 environ, PID 1 maps: $got"
 pass "a shell of the server's user cannot read its /proc"
 
+# ---------------------------------------------------------------- the store gauge from the start
+# Before any sign-in or tool call on this pod: mcp_state_store_up has a sample. The chart's readiness
+# probe pings the store too, so in a cluster this also holds through the probe; the check that fails on
+# 0.2.0 without any probe is tests/unit/test_startup.py.
+# captured first: `grep -q` ends a pipe early, and pipefail would read the writer's SIGPIPE as the answer
+server_log=$(k -n "$ns" logs "$pod" -c server 2>/dev/null) || fail "no server log on $pod"
+[ -n "$server_log" ] || fail "the server log on $pod is empty: the sign-in check below would see nothing"
+if grep -q '"sign_in_completed"' <<<"$server_log"; then fail "$pod already has a sign-in"; fi
+timeout 60 kubectl -n "$ns" port-forward "pod/$pod" 18990:9090 >/dev/null 2>&1 &
+pids+=("$!")
+sample=""
+for _ in $(seq 1 30); do
+  sample=$(curl -fsS --max-time 5 http://127.0.0.1:18990/metrics 2>/dev/null \
+    | grep -E '^mcp_state_store_up\{server="exchange-mcp"\} ' || true)
+  [ -n "$sample" ] && break
+  sleep 1
+done
+[ -n "$sample" ] || fail "no mcp_state_store_up sample on $pod before any sign-in"
+grep -Eq ' 1(\.0)?$' <<<"$sample" || fail "the store is reported down on $pod: $sample"
+pass "mcp_state_store_up has a sample (1) before any sign-in"
+
 # ---------------------------------------------------------------- many replicas
 replica_checks
+
+# ---------------------------------------------------------------- the OWA signature
+# save_draft over MCP with a real access token: the server reads OWA.UserOptions from the stand-in
+# Exchange (GetUserConfiguration) and writes its signature below the body of the new draft.
+if ! draft=$(python3 tests/e2e/flow.py draft "$(main_port 0)" alex "$password"); then
+  fail "save_draft through MCP failed"
+fi
+echo "  save_draft answered: signature: $(jq -r .signature <<<"$draft")"
+[ "$(jq -r .signature <<<"$draft")" = "added from Outlook on the web" ] || fail "the draft was not signed: $draft"
+grep -q "e2e signature from OWA" <<<"$(jq -r .preview <<<"$draft")" || fail "the preview does not show the signature: $draft"
+fake_log=$(k -n "$ns" logs deploy/fake-ews 2>/dev/null) || fail "no log from the stand-in Exchange"
+grep -q '"op": "GetUserConfiguration"' <<<"$fake_log" || fail "the stand-in Exchange never answered GetUserConfiguration"
+pass "save_draft adds the OWA signature read through GetUserConfiguration"
 
 # ---------------------------------------------------------------- the key across restarts
 # Everything through a port-forward to the pod whose container restarts, never the Service: another
@@ -446,6 +494,6 @@ k -n "$ns" get hpa
 [ -n "$cpu" ] || fail "the HPA shows no CPU measurement after 5 minutes"
 pass "the HPA exists and measures CPU (${cpu}% of the request)"
 
-want=12
+want=14
 [ "$passed" -eq "$want" ] || fail "$passed of $want checks ran"
 echo "chart e2e: $passed of $want checks passed"

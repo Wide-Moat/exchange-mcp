@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.2.1
+
+| Area | Changed |
+|---|---|
+| Signature | new: `save_draft` adds the person's Outlook on the web signature exactly as OWA does, read once per call from `OWA.UserOptions` (`GetUserConfiguration`): new messages when `autoaddsignature` is on, replies and forwards when `autoaddsignatureonreply` is on, after the new text and above the quoted original. HTML drafts take `signaturehtml`, text drafts `signaturetext`, each falling back to the other; the signature passes the same sanitiser and Outlook checks as a body. No signature, no OWA options, an Exchange error, or a signature the checks refuse: the draft is saved without it. The preview's `signature` line says whether it was added and why not |
+| Signature switches | `EXCHANGE_MCP_SIGNATURE` (`owa`, default, or `off`; chart value `signature`); any other value stops the server. `save_draft` takes `signature=false` for one unsigned draft |
+| Signature on edits | an edit that keeps the body leaves the signature alone; an edit or an uploaded letter that replaces the body puts it back once, only on a draft saved with it (marked by a second extended property, which survives Exchange's body conversion) and never when the new body already carries its text |
+| Logs | every uvicorn start and stop line was written twice with the same pid: the metrics port's server logged through the same logger as the public one. Its INFO lines are dropped; its warnings and errors stay |
+| Metrics | `mcp_state_store_up` had no sample until the first store operation, so an alert could not see a store that was never reachable. The store is pinged at start, before the first request, and every 15 s; one replica without a store reports 1. `/readyz` still does not depend on the store |
+| CI | `scripts/chart-e2e.sh`: no uvicorn line written twice, the store gauge present before any sign-in, and `save_draft` over MCP signed through `GetUserConfiguration` of the stand-in Exchange (14 checks) |
+
 ## 0.2.0
 
 Many replicas, JSON logs, Prometheus metrics: the same runtime as the other MCP servers of this family.

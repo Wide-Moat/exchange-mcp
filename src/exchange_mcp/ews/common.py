@@ -29,6 +29,10 @@ WELL_KNOWN = {
 # Marks a draft as made by this server (manifesto rule 24). A named property in our own property set.
 DRAFT_PROPERTY_SET = "6e1f8a43-3c0b-4f5e-9d61-2b7a0c5e9f12"
 DRAFT_PROPERTY_NAME = "ExchangeMcpDraft"
+# Marks a draft that was saved with the person's signature ("1"), so an edit that replaces the body puts
+# it back once and never twice (core/signature.py). A property survives Exchange's body conversion,
+# which rewrites the HTML and drops the attributes a marker inside the body would need.
+SIGNATURE_PROPERTY_NAME = "ExchangeMcpSignature"
 
 
 def _children(el):
@@ -41,6 +45,16 @@ def draft_marker_uri() -> etree._Element:
 
 def draft_marker() -> etree._Element:
     return T.ExtendedProperty(draft_marker_uri(), T.Value("1"))
+
+
+def signature_marker_uri() -> etree._Element:
+    return T.ExtendedFieldURI(
+        PropertySetId=DRAFT_PROPERTY_SET, PropertyName=SIGNATURE_PROPERTY_NAME, PropertyType="String"
+    )
+
+
+def signature_marker(signed: bool) -> etree._Element:
+    return T.ExtendedProperty(signature_marker_uri(), T.Value("1" if signed else "0"))
 
 
 def folder_id(value: str) -> etree._Element:
@@ -118,4 +132,6 @@ __all__ = [
     "move_to_deleted",
     "page_of",
     "paged_view",
+    "signature_marker",
+    "signature_marker_uri",
 ]

@@ -69,7 +69,11 @@ Handler = Callable[[Seen], Any]
 
 @dataclass
 class FakeEws:
-    routes: dict[str, list[Any]] = field(default_factory=dict)
+    # A mailbox whose owner never opened Outlook on the web has no OWA options: save_draft reads them for
+    # the signature, and a test that does not care meets the answer most mailboxes give.
+    routes: dict[str, list[Any]] = field(
+        default_factory=lambda: {"GetUserConfiguration": [error("GetUserConfiguration", "ErrorItemNotFound")]}
+    )
     seen: list[Seen] = field(default_factory=list)
     handshakes: int = 0
     _ntlm: Any = None
