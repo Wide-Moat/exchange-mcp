@@ -35,10 +35,16 @@ def lines_of(text: str) -> list[dict]:
     return out
 
 
-def _port() -> int:
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
+def _ports(n: int) -> list[int]:
+    """n distinct free ports: held open together while chosen, so two calls cannot return one port."""
+    socks = [socket.socket() for _ in range(n)]
+    try:
+        for s in socks:
+            s.bind(("127.0.0.1", 0))
+        return [s.getsockname()[1] for s in socks]
+    finally:
+        for s in socks:
+            s.close()
 
 
 def _env(**extra: str) -> dict[str, str]:
@@ -48,7 +54,7 @@ def _env(**extra: str) -> dict[str, str]:
 
 
 def test_the_running_server_writes_only_json():
-    port, metrics_port = _port(), _port()
+    port, metrics_port = _ports(2)
     env = _env(
         **base_env(LISTEN="127.0.0.1", METRICS_PORT=str(metrics_port), PUBLIC_URL=f"http://localhost:{port}"),
         PORT=str(port),

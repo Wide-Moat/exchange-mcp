@@ -54,6 +54,18 @@ end
 return 1
 """
 
+# KEYS: the names of one mark, one per key of the sealing ring. ARGV[1]: lifetime in ms. Set under every
+# name unless any is already set.
+ONCE = """#!lua
+for _, k in ipairs(KEYS) do
+  if redis.call('EXISTS', k) == 1 then return 0 end
+end
+for _, k in ipairs(KEYS) do
+  redis.call('SET', k, '1', 'PX', ARGV[1])
+end
+return 1
+"""
+
 # KEYS[1]: the bucket. ARGV[1]: capacity; ARGV[2]: refill per millisecond. Returns {taken, tokens}.
 BUCKET = """#!lua
 local t = redis.call('TIME')
@@ -85,6 +97,7 @@ class RedisStore(Measured):
         self._r = client
         self._name = namer
         self._closers = closers
+        self._once = client.register_script(ONCE)
         self._window = client.register_script(WINDOW)
         self._bucket = client.register_script(BUCKET)
 
@@ -98,13 +111,13 @@ class RedisStore(Measured):
         return await self._measure(op, guarded)
 
     async def once(self, ns: str, ident: str, ttl: float) -> bool:
-        key = await self._name(ns, ident)
+        keys = await self._name.every(ns, ident)
         ms = max(1, int(ttl * 1000))
-        return bool(await self._call("once", lambda: self._r.set(key, b"1", nx=True, px=ms)))
+        return int(await self._call("once", lambda: self._once(keys=keys, args=[ms]))) == 1
 
     async def release(self, ns: str, ident: str) -> None:
-        key = await self._name(ns, ident)
-        await self._call("release", lambda: self._r.delete(key))
+        keys = await self._name.every(ns, ident)
+        await self._call("release", lambda: self._r.delete(*keys))
 
     async def take_window(self, ns: str, limits: Sequence[tuple[str, int]], window: float) -> bool:
         keys = [await self._name(ns, ident) for ident, _ in limits]
@@ -164,7 +177,9 @@ def connect(settings: Settings, namer: Namer) -> RedisStore:
     common: dict[str, Any] = {
         "socket_timeout": TIMEOUT,
         "socket_connect_timeout": TIMEOUT,
-        "retry": Retry(NoBackoff(), 1),
+        # No retry: every operation changes state, and a retry after a lost reply would spend a token
+        # twice or call a first redemption a reuse. One failure is answered as "try again shortly".
+        "retry": Retry(NoBackoff(), 0),
         "health_check_interval": 15,
     }
     if s.username:

@@ -23,6 +23,11 @@ from exchange_mcp.keys.providers import MAX_SECRET_FILE
 log = logging.getLogger("exchange_mcp.keys.stage")
 
 
+def names_in(src: Path) -> list[str]:
+    """The keys of a Secret volume. Names starting with `..` are Kubernetes' own."""
+    return sorted(n for n in os.listdir(src) if not n.startswith("..") and (src / n).is_file())
+
+
 def copy(src: Path, dst: Path, prefix: str = "") -> int:
     """Copy each key of a Secret volume to `dst`, mode 0400, replacing atomically. Returns how many.
     Names starting with `..` (`..data`, the timestamped dir) are Kubernetes' own; a key may start with
@@ -67,6 +72,18 @@ def main(argv: list[str] | None = None) -> None:
         raise SystemExit(2)
     dst = Path(args[1])
     sources = [(Path(a.split(":", 1)[0]), a.split(":", 1)[1] if ":" in a else "") for a in [args[0], *args[2:]]]
+    # Two Secrets must not stage the same file name: the second would replace the first (a store password
+    # written over the sealing key) and the server would fail later, far from the cause. A file left by an
+    # earlier attempt of this same init container is replaced as before.
+    try:
+        planned = [prefix + n for src, prefix in sources for n in names_in(src)]
+    except OSError as e:
+        log.error("staging the keys failed: %s", e.__class__.__name__, extra={"event": "stage_failed"})
+        raise SystemExit(1) from None
+    twice = sorted({n for n in planned if planned.count(n) > 1})
+    if twice:
+        log.error("two Secrets stage the same file: %s", ", ".join(twice), extra={"event": "stage_collision"})
+        raise SystemExit(2)
     for src, prefix in sources:
         try:
             n = copy(src, dst, prefix)

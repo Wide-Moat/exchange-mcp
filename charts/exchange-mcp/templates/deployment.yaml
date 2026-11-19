@@ -11,14 +11,21 @@ spec:
   {{- if not .Values.autoscaling.enabled }}
   replicas: {{ .Values.replicaCount }}
   {{- end }}
-  # A rolling update keeps the server up through a deploy. A new key from CI changes key.revision, so
-  # every pod is replaced: until the rollout ends, a token sealed by a new pod is refused by an old one
-  # (and the reverse), and the person signs in again. A new key signs everyone out once anyway.
+  {{- if and (include "exchange-mcp.sharedState" .) (ne .Values.key.provider "memory") }}
+  # A rolling update keeps the server up through a deploy: old and new pods share the key and the store.
+  # A new key (key.revision) replaces every pod; until that rollout ends, an old pod refuses what a new
+  # pod sealed, and the person signs in again.
   strategy:
     type: RollingUpdate
     rollingUpdate:
       maxSurge: 1
       maxUnavailable: 0
+  {{- else }}
+  # State in the pod (or a key born in it): two pods must never serve together, or a sign-in code could
+  # be redeemed on each. A deploy is a few seconds without the server.
+  strategy:
+    type: Recreate
+  {{- end }}
   selector:
     matchLabels: {{- include "exchange-mcp.selectorLabels" . | nindent 6 }}
   template:
@@ -214,11 +221,13 @@ spec:
               path: /readyz
               port: metrics
             periodSeconds: 5
+            timeoutSeconds: 3  # /readyz waits at most 0.5 s for the store, and never fails on it
             failureThreshold: 2
           livenessProbe:
             httpGet:
               path: /healthz
               port: metrics
+            timeoutSeconds: 3
             periodSeconds: 30
             failureThreshold: 3
           resources: {{- toYaml .Values.resources | nindent 12 }}

@@ -39,21 +39,27 @@ cleanup() {
 trap cleanup EXIT
 
 # A replica check: a function that returns 0 when the property holds and sets $why when it does not.
+# With KNOWN_BAD the check must fail, and for the reason named (a regular expression): a failure for any
+# other reason (a port-forward that broke, a sign-in that did not work) proves nothing about the property.
 why=""
 replica_check() {
-  local name=$1 fn=$2
+  local name=$1 fn=$2 expected=$3
   why=""
   if "$fn"; then
     if [ -n "$known_bad" ]; then fail "$name passes on an image without the shared store: it proves nothing"; fi
     pass "$name"
   else
     if [ -z "$known_bad" ]; then fail "$name: $why"; fi
+    grep -Eq "$expected" <<<"$why" || fail "$name failed for another reason than the one it tests: $why"
     echo "FAILS AS IT SHOULD $name: $why"
     expected_failures=$((expected_failures + 1))
   fi
 }
 
 # ---------------------------------------------------------------- the cluster around the server
+# A namespace of this run's own: a store promoted by an earlier run, or a stand-in Exchange still serving
+# an earlier certificate, would make this run test the leftovers.
+k delete namespace "$ns" --ignore-not-found --wait=true --timeout=180s >/dev/null
 kubectl create namespace "$ns" --dry-run=client -o yaml | k apply -f - >/dev/null
 sed "s/__NS__/$ns/g" tests/e2e/valkey-sentinel.yaml | k -n "$ns" apply -f - >/dev/null
 sentinels="valkey-sentinel-0.valkey-sentinel.$ns.svc.cluster.local:26379"
@@ -118,8 +124,8 @@ master_of() {
 
 install() {
   local wait=(--wait --timeout 240s)
-  [ -n "$known_bad" ] && wait=()
-  helm upgrade --install "$rel" charts/exchange-mcp -n "$ns" "${wait[@]}" \
+  [ -n "$known_bad" ] && wait=()  # its pods never turn ready: the old image has no /readyz on 9090
+  timeout 300 helm upgrade --install "$rel" charts/exchange-mcp -n "$ns" "${wait[@]}" \
     --set image.repository="${image%:*}" --set image.tag="${image##*:}" --set image.pullPolicy=Never \
     --set publicUrl="https://$host" --set exchange.ewsUrl="https://$ews_host:8443/EWS/Exchange.asmx" \
     --set exchange.caBundle.configMap=ews-ca --set auth.password.loginDomain=corp.example \
@@ -164,8 +170,14 @@ forward_pods() {
     i=$((i + 1))
   done
   for i in $(seq 0 $((replicas - 1))); do
-    for _ in $(seq 1 30); do curl -sS --max-time 5 -o /dev/null "http://127.0.0.1:$((18800 + i))/healthz" 2>/dev/null && break; sleep 1; done
+    for _ in $(seq 1 31); do
+      [ "$(curl -s --max-time 5 -o /dev/null -w '%{http_code}' -H "Host: $host" "http://127.0.0.1:$((18800 + i))/healthz")" = 200 ] && break
+      [ "$_" = 31 ] && fail "pod ${pods[$i]} does not answer through its port-forward"
+      sleep 1
+    done
   done
+  # the stand-in Exchange signs alex in on these pods: the replica checks below depend on it
+  python3 tests/e2e/flow.py code "$(main_port 0)" alex "$password" >/dev/null || fail "the baseline sign-in on ${pods[0]} failed"
 }
 main_port() { echo $((18800 + $1)); }
 metrics_port() { echo $((18900 + $1)); }
@@ -182,16 +194,21 @@ authorize() {
 
 # ---------------------------------------------------------------- the replica checks (spec section 5)
 
-# 1. a code redeemed on pod A is refused on pod B
+# 1. a code redeemed on pod A is refused on pod B. First, B redeems a fresh code A issued: B opens what A
+# sealed, so the refusal that follows is about the code being used, not about B being unable to read it.
 check_code_once() {
-  local out cid verifier code first second
+  local out cid verifier code across first second
+  out=$(python3 tests/e2e/flow.py code "$(main_port 0)" alex "$password") || { why="sign-in on pod A failed"; return 1; }
+  read -r cid verifier code <<<"$out"
+  across=$(python3 tests/e2e/flow.py redeem "$(main_port 1)" "$cid" "$verifier" "$code")
   out=$(python3 tests/e2e/flow.py code "$(main_port 0)" alex "$password") || { why="sign-in on pod A failed"; return 1; }
   read -r cid verifier code <<<"$out"
   first=$(python3 tests/e2e/flow.py redeem "$(main_port 0)" "$cid" "$verifier" "$code")
   second=$(python3 tests/e2e/flow.py redeem "$(main_port 1)" "$cid" "$verifier" "$code")
-  echo "  code redeemed on ${pods[0]}: $first; the same code on ${pods[1]}: $second"
-  [ "$first" = 200 ] || { why="the first redemption answered $first"; return 1; }
-  [ "$second" = 400 ] || { why="pod B answered $second to a code pod A had redeemed"; return 1; }
+  echo "  a code from ${pods[0]} redeemed on ${pods[1]}: $across; another redeemed on ${pods[0]}: $first, then on ${pods[1]}: $second"
+  [ "$across" = "200" ] || { why="pod B could not redeem a fresh code from pod A: $across"; return 1; }
+  [ "$first" = "200" ] || { why="the first redemption answered $first"; return 1; }
+  [ "$second" = "400 invalid_grant" ] || { why="pod B answered $second to a code pod A had redeemed"; return 1; }
 }
 
 # 2. the sign-in attempt limit (5 per login) is shared: five wrong passwords spread over three pods,
@@ -241,9 +258,11 @@ check_failover() {
   while [ "$(date +%s)" -lt "$deadline" ]; do
     after=$(master_of 2>/dev/null || true)
     if [ -n "$after" ] && [ "$after" != "$before" ]; then
-      if out=$(python3 tests/e2e/flow.py code "$(main_port 1)" alex "$password" 2>/dev/null) && [ -n "$out" ]; then
+      if out=$(timeout $((deadline - $(date +%s) + 1)) python3 tests/e2e/flow.py code "$(main_port 1)" alex "$password" 2>/dev/null) \
+        && [ -n "$out" ]; then
         elapsed=$(($(date +%s) - t0))
         echo "  master $before -> $after; a sign-in on pod B issued a code ${elapsed}s after the freeze"
+        [ "$elapsed" -le 30 ] || { why="sign-in came back after ${elapsed}s, not within 30"; return 1; }
         return 0
       fi
     fi
@@ -296,11 +315,15 @@ check_metrics() {
 
 replica_checks() {
   forward_pods
-  replica_check "every pod serves metrics and probes on 9090, and no metrics on the main port" check_metrics
-  replica_check "a code redeemed on pod A is refused on pod B" check_code_once
-  replica_check "sign-in attempts are limited across pods at the configured total" check_limit_shared
-  replica_check "the store's master freezes: store down, pods stay ready, sign-in fails closed, then works after failover within 30 s" check_failover
-  replica_check "every log line of every container, the init container included, is JSON" check_logs_json
+  replica_check "every pod serves metrics and probes on 9090, and no metrics on the main port" check_metrics \
+    "serves no /metrics on 9090"
+  replica_check "a code redeemed on pod A is refused on pod B" check_code_once "pod B answered 200 to a code pod A"
+  replica_check "sign-in attempts are limited across pods at the configured total" check_limit_shared \
+    "the sixth attempt answered 400"
+  replica_check "the store's master freezes: store down, pods stay ready, sign-in fails closed, then works after failover within 30 s" \
+    check_failover "mcp_state_store_up did not turn 0"
+  replica_check "every log line of every container, the init container included, is JSON" check_logs_json \
+    "stage-keys wrote a line that is not a JSON record"
   echo "NOTE the send bucket is shared across replicas: proven against real Valkey in"
   echo "     tests/unit/test_replicas.py::test_the_send_bucket_is_shared_across_replicas (it needs Exchange to send)"
 }
@@ -349,7 +372,19 @@ pass "a shell of the server's user cannot read its /proc"
 replica_checks
 
 # ---------------------------------------------------------------- the key across restarts
-forward
+# Everything through a port-forward to the pod whose container restarts, never the Service: another
+# replica answering would hide a key lost in the restart.
+svc_port=$port
+port=18799
+forward_pod() {
+  [ -n "$svc_pid" ] && kill "$svc_pid" 2>/dev/null || true
+  timeout 900 kubectl -n "$ns" port-forward "pod/$1" "$port:8000" >/dev/null 2>&1 &
+  svc_pid=$!
+  pids+=("$svc_pid")
+  for _ in $(seq 1 30); do curl -fsS --max-time 5 "http://127.0.0.1:$port/healthz" >/dev/null 2>&1 && return; sleep 1; done
+  fail "pod $1 did not answer through port-forward"
+}
+forward_pod "$pod"
 cid=$(register) || fail "client registration failed"
 [ "$(authorize "$cid")" = 302 ] || fail "a fresh client id was not accepted"
 [ "$(authorize "x${cid:1}")" = 400 ] || fail "a forged client id was accepted: the 302 above proves nothing"
@@ -362,9 +397,10 @@ for _ in $(seq 1 60); do
   sleep 2
 done
 [ "$now" -gt "$before" ] || fail "the server container did not restart"
-forward
+forward_pod "$pod"
 [ "$(authorize "$cid")" = 302 ] || fail "after a container restart the key changed"
 pass "a container restart keeps sessions"
+port=$svc_port
 
 kid2=$(scripts/new-sealing-key.sh "$ns" "$secret")
 [ "$kid2" != "$kid1" ] || fail "the new key has the old key id"

@@ -61,17 +61,22 @@ async def _download(request: Request) -> Response:
         return JSONResponse({"error": "The attachment is larger than this connector passes through."}, 413)
     if _DOWNLOADS.locked():
         return JSONResponse({"error": "The server is sending other files. Try again in a minute."}, 503)
+    await _DOWNLOADS.acquire()  # released once the response is sent (_Held), or right here on failure
     try:
-        async with _DOWNLOADS:
-            name, ctype, data = await em.attachment_bytes(_ews(cred), link["a"])
+        name, ctype, data = await em.attachment_bytes(_ews(cred), link["a"])
     except ExchangeError as e:
+        _DOWNLOADS.release()
         log.info("download refused: %s", e.key)
         return JSONResponse({"error": "Exchange did not return the attachment. Ask for a new link."}, 502)
+    except BaseException:
+        _DOWNLOADS.release()
+        raise
     if len(data) > MAX_ATTACHMENT_BYTES:
+        _DOWNLOADS.release()
         return JSONResponse({"error": "The attachment is too large to pass through."}, 413)
     safe = safe_name(link.get("n") or name)
     ascii_name = "".join(ch if 32 <= ord(ch) < 127 and ch not in '"\\' else "_" for ch in safe)
-    return Response(
+    return _Held(
         data,
         media_type=ctype if "/" in ctype else "application/octet-stream",
         headers={
@@ -80,6 +85,17 @@ async def _download(request: Request) -> Response:
             "X-Content-Type-Options": "nosniff",
         },
     )
+
+
+class _Held(Response):
+    """An attachment response that keeps its download slot until it has been sent (or the client left):
+    the bytes stay in memory that long, so the slot must too."""
+
+    async def __call__(self, scope, receive, send) -> None:
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            _DOWNLOADS.release()
 
 
 def _result(response: Response) -> str:

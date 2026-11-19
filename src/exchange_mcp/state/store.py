@@ -54,22 +54,38 @@ class StoreFull(Exception):
 
 
 class Namer:
-    """Turns (namespace, identifier) into a store key that names no one.
+    """Turns (namespace, identifier) into store keys that name no one.
 
-    The HMAC key is derived from the sealing key, once, through `derive` (an async callable returning
-    bytes: `Sealer.derive(KEY_LABEL)`). Domain separation: the label is used for nothing else, and the
-    namespace is inside the MAC, so one identifier in two namespaces gives two unrelated keys."""
+    The HMAC keys are derived from the sealing keys, once, through `derive` (`Sealer.derive(KEY_LABEL)`:
+    one per key that opens, the sealing key first). Domain separation: the label is used for nothing
+    else, and the namespace is inside the MAC, so one identifier in two namespaces gives two unrelated
+    keys.
 
-    def __init__(self, derive: Callable[[bytes], Awaitable[bytes]], prefix: str) -> None:
+    During a rotation replicas hold different key rings ([old], then [old, new] or [new, old], then
+    [new]). A mark that must hold across replicas (a redeemed code) is therefore set and checked under
+    every key of the ring (`every`): any two rings of one rotation share a key, so a code redeemed on
+    one replica is seen by every other. Windows and buckets use the sealing key's name (`__call__`);
+    while the sealing key itself changes between rollouts they are counted twice over, for minutes."""
+
+    def __init__(self, derive: Callable[[bytes], Awaitable[list[bytes]]], prefix: str) -> None:
         self._derive = derive
-        self._key: bytes | None = None
+        self._keys: list[bytes] | None = None
         self.prefix = prefix
 
+    async def every(self, ns: str, ident: str) -> list[str]:
+        if self._keys is None:
+            try:
+                keys = await self._derive(KEY_LABEL)
+            except Exception:  # noqa: BLE001 - a secrets manager that fails leaves nothing to name with
+                raise StoreUnavailable("derive") from None
+            if not keys:
+                raise StoreUnavailable("derive")
+            self._keys = keys
+        message = f"{ns}\n{ident}".encode()
+        return [f"{self.prefix}{ns}:{hmac.new(k, message, hashlib.sha256).hexdigest()[:40]}" for k in self._keys]
+
     async def __call__(self, ns: str, ident: str) -> str:
-        if self._key is None:
-            self._key = await self._derive(KEY_LABEL)
-        mac = hmac.new(self._key, f"{ns}\n{ident}".encode(), hashlib.sha256).hexdigest()[:40]
-        return f"{self.prefix}{ns}:{mac}"
+        return (await self.every(ns, ident))[0]
 
 
 class StateStore(Protocol):
@@ -120,28 +136,30 @@ class MemoryStore(Measured):
         self._buckets: dict[str, tuple[float, float]] = {}  # key -> (tokens, at)
 
     async def once(self, ns: str, ident: str, ttl: float) -> bool:
-        key = await self._name(ns, ident)
-        return await self._measure("once", lambda: self._once_now(key, ttl))
+        keys = await self._name.every(ns, ident)
+        return await self._measure("once", lambda: self._once_now(keys, ttl))
 
-    async def _once_now(self, key: str, ttl: float) -> bool:
+    async def _once_now(self, keys: list[str], ttl: float) -> bool:
         now = self._clock()
-        exp = self._once.get(key)
-        if exp is not None and exp > now:
+        if any(self._once.get(k, 0) > now for k in keys):
             return False
-        if key not in self._once and len(self._once) >= ONCE_MAX:
+        new = [k for k in keys if k not in self._once]
+        if len(self._once) + len(new) > ONCE_MAX:
             for k in [k for k, e in self._once.items() if e <= now]:
                 del self._once[k]
-            if len(self._once) >= ONCE_MAX:
+            if len(self._once) + len(new) > ONCE_MAX:
                 # Forgetting a live mark would let a code be redeemed twice: refuse instead.
                 raise StoreFull
-        self._once[key] = now + ttl
+        for k in keys:
+            self._once[k] = now + ttl
         return True
 
     async def release(self, ns: str, ident: str) -> None:
-        key = await self._name(ns, ident)
+        keys = await self._name.every(ns, ident)
 
         async def run() -> None:
-            self._once.pop(key, None)
+            for k in keys:
+                self._once.pop(k, None)
 
         await self._measure("release", run)
 

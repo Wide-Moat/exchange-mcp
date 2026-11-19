@@ -259,22 +259,27 @@ jobs:
           echo "budget comment posted on #${PR}"
 
   image:
-    if: github.event_name == 'pull_request' && github.event.pull_request.draft == false
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
-      # publish.yml pushes both architectures as one manifest list; both must build before it runs
-      - name: the image builds for amd64 and arm64
+      - name: install the pinned trivy
+        env:
+          TRIVY_VERSION: 0.73.0
+          TRIVY_SHA256: 2edd39da482bb4e9831962487b68f68e3928ec3137794757f54d00383d79547b
         run: |
           set -euo pipefail
-          for arch in amd64 arm64; do
-            docker buildx build --platform "linux/${arch}" --load -t "exchange-mcp:ci-${arch}" .
-            docker run --rm --platform "linux/${arch}" --entrypoint python "exchange-mcp:ci-${arch}" \
-              -c 'import platform, exchange_mcp, redis, prometheus_client; print(platform.machine())'
-          done
+          base="https://github.com/aquasecurity/trivy/releases/download"
+          curl -fsSL --retry 3 --connect-timeout 20 --max-time 300 -o /tmp/trivy.tar.gz \
+            "${base}/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          echo "${TRIVY_SHA256}  /tmp/trivy.tar.gz" | sha256sum -c -
+          tar -xzf /tmp/trivy.tar.gz -C /tmp trivy && chmod +x /tmp/trivy
+      # What publish.yml runs before it pushes: both architectures built once, scanned and started.
+      - name: the image builds, passes the scan and starts on amd64 and arm64
+        run: TRIVY=/tmp/trivy scripts/build-image.sh /tmp/image
 
   # The chart renders, refuses what it must, and in a real cluster delivers the key the way it promises:
   # the Secret in the init container only, no key in the environment, the key kept across a container
@@ -337,6 +342,10 @@ jobs:
           # probes on the metrics port; no CPU limit anywhere
           python3 scripts/chart_rendered.py rendered.yaml
           python3 scripts/chart_rendered.py scaled.yaml
+          python3 scripts/chart_rendered.py one.yaml
+          grep -q 'type: Recreate' one.yaml && grep -q 'type: RollingUpdate' rendered.yaml
+          helm template t charts/exchange-mcp "${ok[@]}" --set service.type=LoadBalancer > lb.yaml
+          python3 scripts/chart_rendered.py lb.yaml
           # the Ingress routes named paths only, never /
           helm template t charts/exchange-mcp "${ok[@]}" --set ingress.enabled=true > paths.yaml
           if grep -Eq 'path: /$' paths.yaml; then echo "the Ingress routes /"; exit 1; fi

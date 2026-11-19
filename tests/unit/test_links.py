@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 
 import httpx
+import pytest
 from conftest import PUBLIC, base_env, ok
 
 from exchange_mcp.app import build
@@ -113,3 +114,31 @@ async def test_an_upload_link_takes_one_upload_at_a_time(rt, cred):
     assert await rt.links.claim_upload(lid) is None
     await rt.links.release_upload(first["u"])
     assert await rt.links.claim_upload(lid) is not None
+
+
+async def test_a_download_slot_is_held_until_the_answer_is_sent(ews, cred):
+    """The attachment sits in memory until it is sent, so the slot that bounds downloads is released only
+    then, on every outcome: sent, refused by Exchange, or a client that went away mid-send."""
+    from exchange_mcp.auth.credential import person_key
+    from exchange_mcp.core import context
+    from exchange_mcp.links import routes
+
+    sealer = LocalSealer([("k1", os.urandom(32))])
+    client = app_for(ews, sealer)
+    links = context.runtime().links
+    free = routes._DOWNLOADS._value  # noqa: SLF001
+    ews.on("GetAttachment", 500)
+    bad = await links.download(cred, person_key(cred.login), "A1", "a.pdf", 3)
+    assert (await client.get(bad["url"].replace(PUBLIC, ""))).status_code == 502
+    assert routes._DOWNLOADS._value == free  # noqa: SLF001
+
+    await routes._DOWNLOADS.acquire()  # noqa: SLF001 - as the route does before building the answer
+    held = routes._Held(b"x" * 10)
+    assert routes._DOWNLOADS._value == free - 1  # noqa: SLF001
+
+    async def gone(message):
+        raise OSError("the client went away")
+
+    with pytest.raises(OSError):
+        await held({"type": "http"}, None, gone)
+    assert routes._DOWNLOADS._value == free  # noqa: SLF001

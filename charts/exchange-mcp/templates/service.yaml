@@ -10,7 +10,20 @@ spec:
     - name: http
       port: {{ .Values.service.port }}
       targetPort: http
-    # for Prometheus inside the cluster; the Ingress routes only `http`
+---
+# Metrics and probes, inside the cluster only: always ClusterIP, whatever service.type the public
+# Service has, and never routed by the Ingress.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "exchange-mcp.fullname" . }}-metrics
+  labels:
+    {{- include "exchange-mcp.labels" . | nindent 4 }}
+    app.kubernetes.io/component: metrics
+spec:
+  type: ClusterIP
+  selector: {{- include "exchange-mcp.selectorLabels" . | nindent 4 }}
+  ports:
     - name: metrics
       port: {{ .Values.metrics.port }}
       targetPort: metrics

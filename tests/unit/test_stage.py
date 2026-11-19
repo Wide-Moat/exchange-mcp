@@ -148,3 +148,27 @@ def test_a_temporary_file_left_by_a_killed_attempt_does_not_block_the_next(tmp_p
     left.chmod(0o400)
     assert stage.copy(src, dst) == 2
     assert sorted(os.listdir(dst)) == ["adfs.pem", "key"]
+
+
+def test_two_secrets_never_stage_the_same_file(tmp_path):
+    """`key.secretKey: state-password` would put the store's password over the sealing key."""
+    src = tmp_path / "secret"
+    src.mkdir()
+    (src / "state-password").write_text("k1:" + "A" * 43)
+    state = tmp_path / "state"
+    state.mkdir()
+    (state / "password").write_text("store-password")
+    dst = tmp_path / "run"
+    dst.mkdir()
+    with pytest.raises(SystemExit) as e:
+        stage.main([str(src), str(dst), f"{state}:state-"])
+    assert e.value.code == 2 and os.listdir(dst) == []
+
+
+def test_staging_again_replaces_what_an_earlier_attempt_left(tmp_path):
+    src = _secret_volume(tmp_path / "secret")
+    dst = tmp_path / "run"
+    dst.mkdir()
+    stage.main([str(src), str(dst)])
+    stage.main([str(src), str(dst)])  # an init container that ran twice
+    assert sorted(os.listdir(dst)) == ["adfs.pem", "key"]

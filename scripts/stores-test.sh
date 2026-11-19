@@ -19,7 +19,7 @@ names=(ex-state-valkey ex-state-vmaster ex-state-vsentinel ex-state-redis ex-sta
 plain=(--save "" --appendonly no --maxmemory-policy noeviction)
 
 sentinel() {  # name image server-binary port master-port
-  docker run -d --name "$1" --network host --entrypoint sh "$2" -c \
+  docker run --pull never -d --name "$1" --network host --entrypoint sh "$2" -c \
     "printf 'port $4\nsentinel monitor mymaster 127.0.0.1 $5 1\nsentinel down-after-milliseconds mymaster 2000\n' > /tmp/s.conf && exec $3 /tmp/s.conf" >/dev/null
 }
 answers() {  # container cli port [args...]
@@ -32,11 +32,15 @@ case "${1:-}" in
   up)
     password=$(openssl rand -hex 16)
     docker rm -f "${names[@]}" >/dev/null 2>&1 || true
-    docker run -d --name ex-state-valkey --network host "$valkey" valkey-server --port 6390 --requirepass "$password" "${plain[@]}" >/dev/null
-    docker run -d --name ex-state-vmaster --network host "$valkey" valkey-server --port 6391 "${plain[@]}" >/dev/null
+    # pulled first, with a deadline; the runs below then never reach a registry (--pull never)
+    for image in "$valkey" "$redis"; do
+      timeout 300 docker pull -q "$image" >/dev/null || { echo "could not pull $image" >&2; exit 1; }
+    done
+    docker run --pull never -d --name ex-state-valkey --network host "$valkey" valkey-server --port 6390 --requirepass "$password" "${plain[@]}" >/dev/null
+    docker run --pull never -d --name ex-state-vmaster --network host "$valkey" valkey-server --port 6391 "${plain[@]}" >/dev/null
     sentinel ex-state-vsentinel "$valkey" valkey-sentinel 26390 6391
-    docker run -d --name ex-state-redis --network host "$redis" redis-server --port 6392 "${plain[@]}" >/dev/null
-    docker run -d --name ex-state-rmaster --network host "$redis" redis-server --port 6393 "${plain[@]}" >/dev/null
+    docker run --pull never -d --name ex-state-redis --network host "$redis" redis-server --port 6392 "${plain[@]}" >/dev/null
+    docker run --pull never -d --name ex-state-rmaster --network host "$redis" redis-server --port 6393 "${plain[@]}" >/dev/null
     sentinel ex-state-rsentinel "$redis" redis-sentinel 26391 6393
     for _ in $(seq 1 30); do
       if answers ex-state-valkey valkey-cli 6390 -a "$password" --no-auth-warning ping | grep -q PONG \

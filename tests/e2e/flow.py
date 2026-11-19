@@ -1,7 +1,7 @@
 """OAuth and sign-in steps against one pod, for scripts/chart-e2e.sh. Standard library only.
 
     python tests/e2e/flow.py code <port> <login> <password>     -> prints: <client_id> <verifier> <code>
-    python tests/e2e/flow.py redeem <port> <client_id> <verifier> <code>   -> prints the HTTP status
+    python tests/e2e/flow.py redeem <port> <client_id> <verifier> <code>   -> "200", or "<status> <error>"
     python tests/e2e/flow.py attempt <port> <login> <password>  -> prints the sign-in page's HTTP status
 
 Each step talks to 127.0.0.1:<port> (a port-forward to one pod) with the public host in the Host header,
@@ -107,8 +107,14 @@ def main(argv: list[str]) -> None:
                 "code_verifier": verifier,
             }
         ).encode()
-        status, _, _ = call(port, "POST", "/token", form, {"Content-Type": "application/x-www-form-urlencoded"})
-        print(status)
+        status, _, text = call(port, "POST", "/token", form, {"Content-Type": "application/x-www-form-urlencoded"})
+        if status == 200:
+            print(status)
+        else:
+            try:
+                print(status, json.loads(text).get("error", "unknown"))
+            except ValueError:
+                print(status, "not-json")
     else:
         raise SystemExit(__doc__)
 

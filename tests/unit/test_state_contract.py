@@ -207,3 +207,36 @@ async def test_a_full_store_refuses_and_the_server_fails_closed(tmp_path):
     finally:
         await store._r.config_set("maxmemory", "0")  # noqa: SLF001
         await store.close()
+
+
+@pytest.mark.parametrize("backend", ["valkey", "valkey-sentinel", "redis", "redis-sentinel"])
+async def test_a_code_stays_redeemed_across_a_key_rotation(backend, tmp_path):
+    """Replicas in the middle of a rotation hold different key rings: [old], [old, new], [new, old], [new].
+    A code redeemed on any of them must be refused on every other, or it could be redeemed twice."""
+    old, new = (b"o" * 32), (b"n" * 32)
+    rings = {
+        "old": LocalSealer([("old", old)]),
+        "old+new": LocalSealer([("old", old), ("new", new)]),
+        "new+old": LocalSealer([("new", new), ("old", old)]),
+        "new": LocalSealer([("new", new)]),
+    }
+    prefix = f"t{secrets.token_hex(4)}:"
+    settings = settings_for(backend, tmp_path, prefix)
+    stores = {name: connect(settings, Namer(s.derive, prefix)) for name, s in rings.items()}
+    try:
+        # every adjacent pair of one rotation: redeemed on the first, refused on the second, and back
+        for i, (a, b) in enumerate([("old", "old+new"), ("old+new", "new+old"), ("new+old", "new")]):
+            for first, second in ((a, b), (b, a)):
+                code = f"code-{i}-{first}"
+                assert await stores[first].once("code", code, 30) is True
+                assert await stores[second].once("code", code, 30) is False, (first, second)
+    finally:
+        for s in stores.values():
+            await s.close()
+
+
+async def test_an_in_process_store_marks_a_code_under_every_key_of_its_ring():
+    ring = LocalSealer([("new", b"n" * 32), ("old", b"o" * 32)])
+    store = MemoryStore(Namer(ring.derive, "m:"))
+    assert await store.once("code", "c", 30) is True
+    assert len(store._once) == 2  # noqa: SLF001 - one mark per key, so a replica on either key sees it

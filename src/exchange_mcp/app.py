@@ -36,6 +36,7 @@ from exchange_mcp.state.remote import make_store
 from exchange_mcp.state.store import Namer, StateStore
 
 log = logging.getLogger("exchange_mcp")
+READY_STORE_SECONDS = 0.5  # how long /readyz waits for the store's answer; the chart's probe allows 3 s
 
 
 def http_client(settings: Settings, *, connections: int | None = None) -> httpx.AsyncClient:
@@ -113,7 +114,12 @@ def build(
             key = await sealer.open("ready", await sealer.seal("ready", {}, 60)) is not None
         except Exception:  # noqa: BLE001 - a secrets manager that fails is the answer, not an error
             key = False
-        store_ok = await store.ping()
+        try:
+            # bounded well inside the probe's timeout: a store that hangs must not fail readiness
+            store_ok = await asyncio.wait_for(store.ping(), READY_STORE_SECONDS)
+        except TimeoutError:
+            store_ok = False
+            metrics.STORE_UP.labels(metrics.SERVER).set(0)
         body = {"ok": key, "key": key, "store": store_ok, "state": store.kind}
         return JSONResponse(body, status_code=200 if key else 503)
 

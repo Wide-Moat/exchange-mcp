@@ -113,6 +113,9 @@ def test_no_store_means_memory_and_a_store_is_one_of_two_kinds():
         ({"STATE_PASSWORD_FILE": "/run/x"}, "not named"),
         ({"STATE_SENTINEL_MASTER": "other"}, "not named"),
         ({"METRICS_PORT": "8000"}, "port of its own"),
+        ({"STATE_URL": "redis://v:6379/16"}, "is 0-15"),
+        ({"STATE_SENTINELS": "s:26379", "STATE_DB": "99"}, "is 0-15"),
+        ({"TRUSTED_PROXIES": "not-a-network"}, "addresses or CIDR"),
     ],
 )
 def test_a_store_configured_wrong_stops_the_start(extra, says):

@@ -5,7 +5,9 @@
 The YAML is read through `yq` (on every GitHub-hosted runner), so the check needs no Python package.
 
 - no container (init or server) has a CPU limit: it throttles, and a VPA setting requests fights it;
-- every probe uses the metrics port, which the Ingress never routes;
+- the server container has an HTTP readiness probe on /readyz and liveness probe on /healthz, both on
+  the metrics port, which the Ingress never routes; no probe anywhere uses another port;
+- the metrics port is published only by a ClusterIP Service;
 - there is at least one Deployment, so a render that produced nothing cannot pass.
 """
 
@@ -24,8 +26,20 @@ def main(path: str) -> int:
     problems = []
     if not deployments:
         problems.append("no Deployment rendered")
+    for svc in (d for d in docs if d["kind"] == "Service"):
+        ports = {p.get("name") for p in svc["spec"].get("ports", [])}
+        if "metrics" in ports and svc["spec"].get("type", "ClusterIP") != "ClusterIP":
+            problems.append(f"Service {svc['metadata']['name']} publishes metrics as {svc['spec']['type']}")
     for d in deployments:
         pod = d["spec"]["template"]["spec"]
+        server = [c for c in pod["containers"] if c["name"] == "server"]
+        if not server:
+            problems.append("no server container")
+        for c in server:
+            for probe, path in (("readinessProbe", "/readyz"), ("livenessProbe", "/healthz")):
+                got = (c.get(probe) or {}).get("httpGet") or {}
+                if got.get("path") != path or got.get("port") != "metrics":
+                    problems.append(f"server {probe} is not GET {path} on the metrics port: {got or 'absent'}")
         for c in pod["containers"] + pod.get("initContainers", []):
             if "cpu" in ((c.get("resources") or {}).get("limits") or {}):
                 problems.append(f"{c['name']} has a CPU limit")

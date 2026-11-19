@@ -583,7 +583,18 @@ MUTATIONS = [
     (
         "shared: a code is marked once in Valkey",
         "state/remote.py",
-        [('self._r.set(key, b"1", nx=True, px=ms)', 'self._r.set(key, b"1", px=ms)')],
+        [("  if redis.call('EXISTS', k) == 1 then return 0 end\n", "")],
+        "tests/unit/test_state_contract.py",
+    ),
+    (
+        "a code stays redeemed across a key rotation",
+        "keys/seal.py",
+        [
+            (
+                "for raw in self._raw]",
+                "for raw in self._raw[:1]]",
+            )
+        ],
         "tests/unit/test_state_contract.py",
     ),
     (
@@ -634,7 +645,12 @@ MUTATIONS = [
     (
         "no identifier reaches the store in clear",
         "state/store.py",
-        [('        return f"{self.prefix}{ns}:{mac}"', '        return f"{self.prefix}{ns}:{ident}"')],
+        [
+            (
+                '{hmac.new(k, message, hashlib.sha256).hexdigest()[:40]}" for k in self._keys]',
+                '{ident}" for k in self._keys]',
+            )
+        ],
         "tests/unit/test_state_contract.py",
     ),
     (
@@ -692,6 +708,12 @@ MUTATIONS = [
         "links/links.py",
         [('if body is None or not await self._store.once("upload", body["u"], UPLOAD_TTL):', "if body is None:")],
         "tests/unit/test_links.py",
+    ),
+    (
+        "two Secrets never stage the same file",
+        "keys/stage.py",
+        [("    if twice:\n", "    if False:\n")],
+        "tests/unit/test_stage.py",
     ),
     (
         "logs: every record is one JSON object",
@@ -776,7 +798,14 @@ def main() -> int:
                 failures.append(f"{what}: tests still pass with the guard removed")
             elif code != 1:
                 failures.append(f"{what}: pytest exited {code}, which is not a failing test")
-    if run("tests/unit") != 0:
+    restored = subprocess.run(  # noqa: S603 - fixed arguments
+        [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "tests/unit"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+    )
+    if restored.returncode != 0:
+        print("\n".join(restored.stdout.splitlines()[-30:]))
         failures.append("the suite does not pass after restoring the code")
     print(f"\n{len(MUTATIONS)} mutations, {len(failures)} problems")
     for f in failures:

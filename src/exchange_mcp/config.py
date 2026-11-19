@@ -156,6 +156,11 @@ def _networks(name: str, value: str) -> tuple[str, ...]:
     return tuple(out)
 
 
+def _db_range(db: int) -> None:
+    if not 0 <= db <= 15:
+        raise ConfigError(f"{PREFIX}STATE_DB, or the database in {PREFIX}STATE_URL, is 0-15")
+
+
 def _state(get, prefix_default: str = DEFAULT_STATE_PREFIX) -> StateSettings | None:
     url = get("STATE_URL")
     hosts = [h for h in get("STATE_SENTINELS").split(",") if h.strip()]
@@ -175,8 +180,6 @@ def _state(get, prefix_default: str = DEFAULT_STATE_PREFIX) -> StateSettings | N
         db = int(rest["STATE_DB"] or "0")
     except ValueError:
         raise ConfigError(f"{PREFIX}STATE_DB must be an integer") from None
-    if not 0 <= db <= 15:
-        raise ConfigError(f"{PREFIX}STATE_DB is 0-15")
     tls_word = get("STATE_TLS", "false").lower()
     if tls_word not in ("true", "false"):
         raise ConfigError(f"{PREFIX}STATE_TLS is true or false")
@@ -211,11 +214,13 @@ def _state(get, prefix_default: str = DEFAULT_STATE_PREFIX) -> StateSettings | N
             if rest["STATE_DB"] and int(path) != db:
                 raise ConfigError(f"{PREFIX}STATE_URL and {PREFIX}STATE_DB name different databases")
             common["db"] = int(path)
+        _db_range(int(common["db"]))  # type: ignore[call-overload]
         if rest["STATE_SENTINEL_PASSWORD_FILE"]:
             raise ConfigError(f"{PREFIX}STATE_SENTINEL_PASSWORD_FILE is for Sentinel; this store is a URL")
         if get("STATE_TLS") and tls != (u.scheme == "rediss"):
             raise ConfigError(f"{PREFIX}STATE_TLS contradicts the scheme of {PREFIX}STATE_URL")
         return StateSettings(url=url, host=u.hostname, port=port, tls=u.scheme == "rediss", **common)
+    _db_range(db)
     sentinels = tuple(_host_port(f"{PREFIX}STATE_SENTINELS", h) for h in hosts)
     master = get("STATE_SENTINEL_MASTER", "mymaster")
     return StateSettings(
